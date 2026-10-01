@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Control de Gastos</title>
+<link rel="stylesheet" href="style.css">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1d4ed8">
+</head>
+<body>
+<div id="login-screen" class="screen active">
+  <div class="login-card">
+    <div class="logo">S/</div>
+    <h1>Tu plata, en orden</h1>
+    <p>Registra ingresos y gastos, y separa tu ahorro sin que se mezcle con lo que gastas.</p>
+    <button id="btn-login" class="btn primary">Entrar con Google</button>
+  </div>
+</div>
+
+<div id="app-screen" class="screen">
+  <header class="topbar">
+    <div class="user"><img id="user-avatar" alt="" class="avatar"><div><small>Hola,</small><strong id="user-name">Usuario</strong></div></div>
+    <div class="top-actions"><button id="btn-settings" class="icon-btn" title="Frecuencia de ingreso" aria-label="Ajustes">⚙</button><button id="btn-logout" class="icon-btn" title="Cerrar sesión" aria-label="Cerrar sesión">⎋</button></div>
+  </header>
+
+  <main class="content">
+    <section class="wallets">
+      <div class="wallet main">
+        <small>Disponible ahora</small>
+        <h1 id="wallet-balance">S/ 0.00</h1>
+        <p id="wallet-hint"></p>
+      </div>
+      <div class="wallet fund">
+        <small>Fondo de ahorro</small>
+        <h2 id="fund-balance">S/ 0.00</h2>
+        <div class="fund-actions">
+          <button class="chip" data-quick="deposit">+ Guardar</button>
+          <button class="chip" data-quick="withdraw">− Retirar</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="seg" id="mode-seg"></div>
+      <div class="period-nav">
+        <button id="btn-prev" class="icon-btn" aria-label="Anterior">‹</button>
+        <div><strong id="period-title">—</strong><input id="range-input" placeholder="Elige fechas" readonly></div>
+        <button id="btn-next" class="icon-btn" aria-label="Siguiente">›</button>
+      </div>
+      <div class="stats">
+        <div><small>Ingresos</small><b id="s-income" class="pos">S/ 0.00</b></div>
+        <div><small>Gastos</small><b id="s-expense" class="neg">S/ 0.00</b></div>
+        <div><small>Ahorrado</small><b id="s-saved" class="sav">S/ 0.00</b></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Regla 50 / 30 / 20</h3>
+      <div id="rule"></div>
+      <p id="projection" class="muted"></p>
+    </section>
+
+    <section class="panel">
+      <h3>Gastos por categoría</h3>
+      <div class="chart-box"><canvas id="chart"></canvas></div>
+    </section>
+
+    <section class="panel">
+      <div class="list-head">
+        <h3>Movimientos</h3>
+        <select id="filter"></select>
+      </div>
+      <div id="tx-list"></div>
+      <button id="btn-more" class="btn ghost" hidden>Ver más</button>
+    </section>
+  </main>
+  <button id="btn-add" class="fab">+ Nuevo registro</button>
+</div>
+
+<div id="modal" class="modal">
+  <form id="tx-form" class="sheet">
+    <div class="sheet-head"><h2 id="modal-title">Nuevo registro</h2><button type="button" id="btn-close" class="icon-btn" aria-label="Cerrar">×</button></div>
+    <div class="types" id="types">
+      <label><input type="radio" name="type" value="expense" checked><span class="t-exp">Gasto</span></label>
+      <label><input type="radio" name="type" value="income"><span class="t-inc">Ingreso</span></label>
+      <label><input type="radio" name="type" value="deposit"><span class="t-sav">Al fondo</span></label>
+      <label><input type="radio" name="type" value="withdraw"><span class="t-sav">Del fondo</span></label>
+    </div>
+    <p id="type-help" class="muted"></p>
+    <label class="field">Monto (S/)<input type="number" id="amount" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00"></label>
+    <label class="field" data-for="expense income">Categoría<select id="category"></select></label>
+    <label class="field" data-for="expense">Pagar con
+      <select id="source"><option value="wallet">Saldo disponible</option><option value="fund">Fondo de ahorro</option></select>
+    </label>
+    <label class="field">Nota<input type="text" id="note" placeholder="Ej. Almuerzo, Netflix, gasolina…"></label>
+    <label class="field" data-for="expense income">Método
+      <select id="method"><option>Efectivo</option><option>Tarjeta de Débito</option><option>Tarjeta de Crédito</option><option>Transferencia / App</option></select>
+    </label>
+    <label class="field">Fecha<input type="text" id="date" required></label>
+    <div class="field fixed" data-for="expense">
+      <label class="check"><input type="checkbox" id="fixed"> Gasto fijo (se repite)</label>
+      <select id="repeat" hidden><option value="mensual">Cada mes</option><option value="quincenal">Cada 15 días</option><option value="semanal">Cada semana</option></select>
+    </div>
+    <button type="submit" class="btn primary">Guardar</button>
+  </form>
+</div>
+
+<div id="settings" class="modal">
+  <form id="settings-form" class="sheet">
+    <div class="sheet-head"><h2>¿Cada cuánto recibes tu ingreso?</h2><button type="button" id="btn-close-settings" class="icon-btn" aria-label="Cerrar">×</button></div>
+    <p class="muted">Tu balance y la regla 50/30/20 se muestran por este periodo. Siempre puedes ver otro mes, un rango de fechas o todo el historial.</p>
+    <div class="types three">
+      <label><input type="radio" name="freq" value="m" checked><span class="t-pay">Mensual</span></label>
+      <label><input type="radio" name="freq" value="q"><span class="t-pay">Quincenal</span></label>
+      <label><input type="radio" name="freq" value="w"><span class="t-pay">Semanal</span></label>
+    </div>
+    <button type="submit" class="btn primary">Guardar</button>
+  </form>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/es.js"></script>
+<script type="module" src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(console.error));
+</script>
+</body>
+</html>
