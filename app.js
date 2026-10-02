@@ -37,14 +37,15 @@ const CATS = {
   }
 };
 const FUND_COLOR = '#06b6d4';
-const colorOf = t => (t.type === 'deposit' || t.type === 'withdraw') ? FUND_COLOR : (CATS[t.type]?.[t.category]?.[0] || '#94a3b8');
+const FUND_TYPES = ['deposit', 'withdraw', 'adjust'];
+const colorOf = t => FUND_TYPES.includes(t.type) ? FUND_COLOR : (CATS[t.type]?.[t.category]?.[0] || '#94a3b8');
 const HELP = {
   expense: 'Sale de tu saldo disponible, o de tu fondo si eliges pagar con él.',
   income: 'Suma a tu saldo disponible.',
   deposit: 'Mueve dinero del saldo al fondo. No cuenta como gasto.',
   withdraw: 'Mueve dinero del fondo al saldo. No cuenta como ingreso.'
 };
-const TITLES = { deposit: 'Guardado en el fondo', withdraw: 'Retiro del fondo' };
+const TITLES = { deposit: 'Guardado en el fondo', withdraw: 'Retiro del fondo', adjust: 'Ajuste del fondo' };
 
 // freq: cómo recibes tu ingreso ('m' mensual por defecto, 'q' quincenal, 'w' semanal). mode: 'p' = tu periodo de pago, 'm' mes, 'r' rango, 'all' todo.
 const state = { user: null, txs: [], allIds: new Set(), freq: 'm', mode: 'p', anchor: new Date(), range: null, filter: 'all', limit: 10, editing: null, chart: null, unsubs: [] };
@@ -118,7 +119,7 @@ onAuthStateChanged(auth, user => {
   $('user-avatar').src = user.photoURL || '';
   // Configuración del usuario (frecuencia de ingreso). Sin configurar = mensual.
   state.unsubs.push(onSnapshot(doc(db, 'users', user.uid), snap => {
-    const f = snap.data()?.payFreq;
+    const f = snap.data()?.payFreq; applyCats(snap.data()?.cats);
     if (f && f !== state.freq) { state.freq = f; state.mode = 'p'; }
     if (!snap.exists() && !askedFreq) { askedFreq = true; openSettings(); }
     render();
@@ -154,21 +155,68 @@ function genFixed() {
   }
 }
 
-/* ---------- Ajustes: frecuencia de ingreso ---------- */
+/* ---------- Ajustes: frecuencia, categorías y fondo ---------- */
+const PALETTE = ['#2563eb', '#7c3aed', '#0d9488', '#f59e0b', '#e11d48', '#db2777', '#0284c7', '#84cc16', '#ea580c', '#64748b'];
+let draft = { expense: [], income: [] };
+
+function applyCats(c) {
+  if (!c) return;
+  for (const k of ['expense', 'income']) if (c[k]?.length) CATS[k] = Object.fromEntries(c[k].map(x => [x.n, [x.c, x.b]]));
+  $('filter').removeAttribute('data-ready');
+}
+function renderCatEditor() {
+  for (const k of ['expense', 'income'])
+    $('cats-' + k).innerHTML = draft[k].map((c, i) => `<div class="cat-row" data-k="${k}" data-i="${i}">
+      <input type="color" value="${c.c}" data-f="c" aria-label="Color"><input type="text" value="${esc(c.n)}" maxlength="24" data-f="n" placeholder="Nombre">
+      ${k === 'expense' ? `<select data-f="b"><option value="need"${c.b === 'need' ? ' selected' : ''}>Necesidad</option><option value="want"${c.b !== 'need' ? ' selected' : ''}>Gusto</option></select>` : ''}
+      <button type="button" data-rm aria-label="Quitar">🗑️</button></div>`).join('');
+}
 function openSettings() {
   document.querySelector(`input[name=freq][value=${state.freq}]`).checked = true;
+  for (const k of ['expense', 'income']) draft[k] = Object.entries(CATS[k]).map(([n, v]) => k === 'expense' ? { n, c: v[0], b: v[1] } : { n, c: v[0] });
+  renderCatEditor();
   $('settings').classList.add('active');
 }
 $('btn-settings').onclick = openSettings;
 $('btn-close-settings').onclick = () => $('settings').classList.remove('active');
+$('settings-form').addEventListener('input', e => {
+  const row = e.target.closest('.cat-row'); if (!row || !e.target.dataset.f) return;
+  draft[row.dataset.k][row.dataset.i][e.target.dataset.f] = e.target.value;
+});
+$('settings-form').addEventListener('click', e => {
+  const add = e.target.closest('[data-add]'), rm = e.target.closest('[data-rm]');
+  if (add) { const k = add.dataset.add; draft[k].push(k === 'expense' ? { n: '', c: PALETTE[draft[k].length % 10], b: 'want' } : { n: '', c: PALETTE[draft[k].length % 10] }); renderCatEditor(); }
+  if (rm) { const r = rm.closest('.cat-row'); draft[r.dataset.k].splice(r.dataset.i, 1); renderCatEditor(); }
+});
 $('settings-form').addEventListener('submit', async e => {
   e.preventDefault();
+  const clean = {};
+  for (const k of ['expense', 'income']) {
+    const seen = new Set();
+    clean[k] = draft[k].map(c => ({ ...c, n: c.n.trim() })).filter(c => c.n && !seen.has(c.n.toLowerCase()) && seen.add(c.n.toLowerCase()));
+    if (!clean[k].length) return alert('Necesitas al menos una categoría de ' + (k === 'expense' ? 'gasto' : 'ingreso') + '.');
+  }
   state.freq = document.querySelector('input[name=freq]:checked').value;
   state.mode = 'p'; state.anchor = new Date(); state.limit = 10;
+  applyCats(clean);
   $('settings').classList.remove('active'); render();
-  try { await setDoc(doc(db, 'users', state.user.uid), { payFreq: state.freq }, { merge: true }); }
+  try { await setDoc(doc(db, 'users', state.user.uid), { payFreq: state.freq, cats: clean }, { merge: true }); }
   catch (err) { console.error(err); alert('No se pudo guardar tu configuración.'); }
 });
+
+/* Ajustar el fondo al valor real (crea un movimiento de corrección, no un ingreso ni un gasto) */
+$('btn-adjust').onclick = async () => {
+  const cur = balances(state.txs).f;
+  const raw = prompt('¿Cuánto hay realmente en tu fondo de ahorro hoy? (S/)', cur.toFixed(2));
+  if (raw === null) return;
+  const real = parseFloat(raw.replace(',', '.'));
+  if (isNaN(real) || real < 0) return alert('Ingresa un monto válido.');
+  const diff = Math.round((real - cur) * 100) / 100;
+  if (!diff) return;
+  try {
+    await addDoc(collection(db, 'transactions'), { userId: state.user.uid, type: 'adjust', amount: diff, date: iso(new Date()), category: 'Ajuste del fondo', subcategory: 'Corrección de saldo', paymentMethod: '', source: 'fund', createdAt: serverTimestamp() });
+  } catch (err) { console.error(err); alert('No se pudo ajustar el fondo.'); }
+};
 
 /* ---------- Cálculos ---------- */
 function balances(txs) {
@@ -178,6 +226,7 @@ function balances(txs) {
     else if (t.type === 'expense') t.source === 'fund' ? f -= t.amount : w -= t.amount;
     else if (t.type === 'deposit') { w -= t.amount; f += t.amount; }
     else if (t.type === 'withdraw') { w += t.amount; f -= t.amount; }
+    else if (t.type === 'adjust') f += t.amount;
   }
   return { w, f };
 }
@@ -204,6 +253,7 @@ function render() {
     if (t.type === 'income') income += t.amount;
     else if (t.type === 'deposit') saved += t.amount;
     else if (t.type === 'withdraw') saved -= t.amount;
+    else if (t.type === 'adjust') continue;
     else {
       expense += t.amount;
       if (t.source !== 'fund') walletExp += t.amount;
@@ -273,21 +323,21 @@ function renderFilter() {
 function renderList(inRange) {
   const f = state.filter;
   const list = inRange.filter(t =>
-    f === 'all' || (f === 't:fund' ? (t.type === 'deposit' || t.type === 'withdraw') :
+    f === 'all' || (f === 't:fund' ? FUND_TYPES.includes(t.type) :
       f.startsWith('t:') ? t.type === f.slice(2) : t.category === f.slice(2)));
   const box = $('tx-list');
   if (!list.length) box.innerHTML = '<div class="empty">No hay movimientos en este periodo. Toca "+ Nuevo registro" para añadir el primero.</div>';
   else box.innerHTML = list.slice(0, state.limit).map(t => {
-    const fund = t.type === 'deposit' || t.type === 'withdraw';
-    const sign = t.type === 'income' ? '+' : t.type === 'expense' ? '−' : '';
+    const fund = FUND_TYPES.includes(t.type);
+    const sign = t.type === 'income' ? '+' : t.type === 'expense' ? '−' : t.type === 'adjust' && t.amount > 0 ? '+' : '';
     const cls = t.type === 'income' ? 'pos' : t.type === 'expense' ? 'neg' : 'sav';
-    const icon = t.type === 'income' ? '↓' : t.type === 'expense' ? '↑' : t.type === 'deposit' ? '⇥' : '⇤';
-    const tag = t.type === 'deposit' ? 'saldo → fondo' : t.type === 'withdraw' ? 'fondo → saldo' : (t.source === 'fund' ? 'pagado con fondo' : '');
+    const icon = t.type === 'income' ? '↓' : t.type === 'expense' ? '↑' : t.type === 'deposit' ? '⇥' : t.type === 'adjust' ? '≈' : '⇤';
+    const tag = t.type === 'adjust' ? 'corrección manual' : t.type === 'deposit' ? 'saldo → fondo' : t.type === 'withdraw' ? 'fondo → saldo' : (t.source === 'fund' ? 'pagado con fondo' : '');
     const sub = [dShort(t.date), t.subcategory || t.note, !fund && t.paymentMethod].filter(Boolean).map(esc).join(' · ');
     return `<div class="tx"><div class="dot" style="background:${colorOf(t)}">${icon}</div>
       <div class="info"><b>${t.esFijo ? '🔒 ' : ''}${esc(TITLES[t.type] || t.category)}</b><small>${sub}</small></div>
       <div class="amt ${cls}">${sign}${fmt(t.amount)}${tag ? `<small>${tag}</small>` : ''}</div>
-      <div class="acts"><button data-edit="${t.id}" aria-label="Editar">✏️</button><button data-del="${t.id}" aria-label="Eliminar">🗑️</button></div></div>`;
+      <div class="acts">${t.type === 'adjust' ? '' : `<button data-edit="${t.id}" aria-label="Editar">✏️</button>`}<button data-del="${t.id}" aria-label="Eliminar">🗑️</button></div></div>`;
   }).join('');
   $('btn-more').hidden = list.length <= state.limit;
 }
@@ -321,7 +371,7 @@ function openModal(type, tx) {
   $('modal-title').textContent = tx ? 'Editar registro' : 'Nuevo registro';
   datePicker.setDate(tx?.date || new Date());
   if (tx) {
-    $('amount').value = tx.amount; $('category').value = tx.category; $('note').value = tx.subcategory || tx.note || '';
+    $('amount').value = tx.amount; if (CATS[tx.type] && !CATS[tx.type][tx.category]) $('category').add(new Option(tx.category)); $('category').value = tx.category; $('note').value = tx.subcategory || tx.note || '';
     $('method').value = tx.paymentMethod || 'Efectivo'; $('source').value = tx.source || 'wallet';
     $('fixed').checked = !!tx.esFijo; $('repeat').value = tx.repeticion || 'mensual';
   }
