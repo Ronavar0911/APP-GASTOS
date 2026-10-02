@@ -204,19 +204,23 @@ $('settings-form').addEventListener('submit', async e => {
   catch (err) { console.error(err); alert('No se pudo guardar tu configuración.'); }
 });
 
-/* Ajustar el fondo al valor real (crea un movimiento de corrección, no un ingreso ni un gasto) */
-$('btn-adjust').onclick = async () => {
-  const cur = balances(state.txs).f;
-  const raw = prompt('¿Cuánto hay realmente en tu fondo de ahorro hoy? (S/)', cur.toFixed(2));
+/* Ajustar un saldo al valor real (crea un movimiento de corrección: no es ingreso ni gasto) */
+async function adjustBalance(target) {
+  const b = balances(state.txs), cur = target === 'wallet' ? b.w : b.f;
+  const msg = target === 'wallet' ? '¿Cuánto dinero tienes realmente disponible hoy (efectivo y cuentas, sin contar tu fondo)? (S/)' : '¿Cuánto hay realmente en tu fondo de ahorro hoy? (S/)';
+  const raw = prompt(msg, cur.toFixed(2));
   if (raw === null) return;
   const real = parseFloat(raw.replace(',', '.'));
-  if (isNaN(real) || real < 0) return alert('Ingresa un monto válido.');
+  if (isNaN(real)) return alert('Ingresa un monto válido.');
+  if (target === 'fund' && real < 0) return alert('El fondo no puede ser negativo.');
   const diff = Math.round((real - cur) * 100) / 100;
   if (!diff) return;
   try {
-    await addDoc(collection(db, 'transactions'), { userId: state.user.uid, type: 'adjust', amount: diff, date: iso(new Date()), category: 'Ajuste del fondo', subcategory: 'Corrección de saldo', paymentMethod: '', source: 'fund', createdAt: serverTimestamp() });
-  } catch (err) { console.error(err); alert('No se pudo ajustar el fondo.'); }
-};
+    await addDoc(collection(db, 'transactions'), { userId: state.user.uid, type: 'adjust', target, amount: diff, date: iso(new Date()), category: target === 'wallet' ? 'Ajuste del saldo' : 'Ajuste del fondo', subcategory: 'Corrección de saldo', paymentMethod: '', source: target, createdAt: serverTimestamp() });
+  } catch (err) { console.error(err); alert('No se pudo ajustar el saldo.'); }
+}
+$('btn-adjust').onclick = () => adjustBalance('fund');
+$('btn-adjust-wallet').onclick = () => adjustBalance('wallet');
 
 /* ---------- Cálculos ---------- */
 function balances(txs) {
@@ -226,7 +230,7 @@ function balances(txs) {
     else if (t.type === 'expense') t.source === 'fund' ? f -= t.amount : w -= t.amount;
     else if (t.type === 'deposit') { w -= t.amount; f += t.amount; }
     else if (t.type === 'withdraw') { w += t.amount; f -= t.amount; }
-    else if (t.type === 'adjust') f += t.amount;
+    else if (t.type === 'adjust') t.target === 'wallet' ? w += t.amount : f += t.amount;
   }
   return { w, f };
 }
@@ -264,6 +268,10 @@ function render() {
   $('s-income').textContent = fmt(income);
   $('s-expense').textContent = fmt(expense);
   $('s-saved').textContent = fmt(saved);
+  const net = income - walletExp - saved; // lo que ingresó menos lo que salió del saldo en el periodo
+  $('period-label').textContent = 'Saldo del periodo · ' + periodTitle([s, e]);
+  $('period-balance').textContent = fmt(net);
+  $('period-balance').classList.toggle('neg', net < 0);
 
   $('rule').innerHTML = [
     barRow('Necesidades 50%', needs, income * .5, '#2563eb', true),
@@ -335,7 +343,7 @@ function renderList(inRange) {
     const tag = t.type === 'adjust' ? 'corrección manual' : t.type === 'deposit' ? 'saldo → fondo' : t.type === 'withdraw' ? 'fondo → saldo' : (t.source === 'fund' ? 'pagado con fondo' : '');
     const sub = [dShort(t.date), t.subcategory || t.note, !fund && t.paymentMethod].filter(Boolean).map(esc).join(' · ');
     return `<div class="tx"><div class="dot" style="background:${colorOf(t)}">${icon}</div>
-      <div class="info"><b>${t.esFijo ? '🔒 ' : ''}${esc(TITLES[t.type] || t.category)}</b><small>${sub}</small></div>
+      <div class="info"><b>${t.esFijo ? '🔒 ' : ''}${esc(t.type === 'adjust' && t.target === 'wallet' ? 'Ajuste del saldo' : TITLES[t.type] || t.category)}</b><small>${sub}</small></div>
       <div class="amt ${cls}">${sign}${fmt(t.amount)}${tag ? `<small>${tag}</small>` : ''}</div>
       <div class="acts">${t.type === 'adjust' ? '' : `<button data-edit="${t.id}" aria-label="Editar">✏️</button>`}<button data-del="${t.id}" aria-label="Eliminar">🗑️</button></div></div>`;
   }).join('');

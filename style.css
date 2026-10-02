@@ -107,3 +107,9 @@ select,input[type=text],input[type=number]{border:1px solid var(--line);backgrou
 .cat-row button{border:0;background:none;cursor:pointer;font-size:1rem}
 .btn.small{padding:8px 14px;width:auto;font-size:.85rem;margin-top:4px}
 .sheet h4{font-size:.95rem;margin-top:6px}
+
+.wallet.main .chip{align-self:flex-start}
+.wallet.period{grid-column:1/-1;background:#fff;color:var(--ink);box-shadow:var(--shadow);flex-direction:row;align-items:center;gap:12px}
+.wallet.period small{color:var(--muted);opacity:1}
+.wallet.period h2{font-size:1.5rem}
+.wallet.period h2.neg{color:var(--neg)}
