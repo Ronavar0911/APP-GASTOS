@@ -40,6 +40,7 @@
         <div class="fund-actions">
           <button class="chip" data-quick="deposit">+ Guardar</button>
           <button class="chip" data-quick="withdraw">− Retirar</button>
+          <button class="chip" id="btn-adjust" title="Corregir al monto real">≈ Ajustar</button>
         </div>
       </div>
     </section>
@@ -111,13 +112,19 @@
 
 <div id="settings" class="modal">
   <form id="settings-form" class="sheet">
-    <div class="sheet-head"><h2>¿Cada cuánto recibes tu ingreso?</h2><button type="button" id="btn-close-settings" class="icon-btn" aria-label="Cerrar">×</button></div>
+    <div class="sheet-head"><h2>Ajustes</h2><button type="button" id="btn-close-settings" class="icon-btn" aria-label="Cerrar">×</button></div>
+    <h4>¿Cada cuánto recibes tu ingreso?</h4>
     <p class="muted">Tu balance y la regla 50/30/20 se muestran por este periodo. Siempre puedes ver otro mes, un rango de fechas o todo el historial.</p>
     <div class="types three">
       <label><input type="radio" name="freq" value="m" checked><span class="t-pay">Mensual</span></label>
       <label><input type="radio" name="freq" value="q"><span class="t-pay">Quincenal</span></label>
       <label><input type="radio" name="freq" value="w"><span class="t-pay">Semanal</span></label>
     </div>
+    <h4>Categorías de gasto</h4>
+    <p class="muted">"Necesidad" cuenta para el 50% y "Gusto" para el 30%. Si cambias un nombre, los registros anteriores conservan el nombre antiguo.</p>
+    <div id="cats-expense"></div><button type="button" class="btn ghost small" data-add="expense">+ Añadir categoría</button>
+    <h4>Categorías de ingreso</h4>
+    <div id="cats-income"></div><button type="button" class="btn ghost small" data-add="income">+ Añadir categoría</button>
     <button type="submit" class="btn primary">Guardar</button>
   </form>
 </div>
