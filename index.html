@@ -12,7 +12,9 @@
 <meta name="theme-color" content="#1d4ed8">
 </head>
 <body>
-<div id="login-screen" class="screen active">
+<div id="boot" class="boot"><div class="spinner"></div></div>
+
+<div id="login-screen" class="screen">
   <div class="login-card">
     <div class="logo">S/</div>
     <h1>Tu plata, en orden</h1>
@@ -54,7 +56,7 @@
       <div class="seg" id="mode-seg"></div>
       <div class="period-nav">
         <button id="btn-prev" class="icon-btn" aria-label="Anterior">‹</button>
-        <div><strong id="period-title">—</strong><input id="range-input" placeholder="Elige fechas" readonly></div>
+        <div id="period-center"><strong id="period-title">—</strong><input id="range-input" placeholder="Elige un día o un rango" readonly></div>
         <button id="btn-next" class="icon-btn" aria-label="Siguiente">›</button>
       </div>
       <div class="stats">
@@ -109,11 +111,26 @@
     <label class="field">Fecha<input type="text" id="date" required></label>
     <div class="field fixed" data-for="expense">
       <label class="check"><input type="checkbox" id="fixed"> Gasto fijo (se repite)</label>
-      <select id="repeat" hidden><option value="mensual">Cada mes</option><option value="quincenal">Cada 15 días</option><option value="semanal">Cada semana</option></select>
+      <div id="repeat-box" hidden>
+        <select id="repeat"><option value="mensual">Cada mes (el día de la fecha elegida)</option><option value="quincenal">Cada 15 días</option><option value="semanal">Cada semana</option><option value="laboral">Todos los días laborables (lun–vie)</option><option value="diario">Todos los días</option></select>
+        <p class="muted">El monto es por cada vez. Ej.: pago de tarjeta el día 5 → elige la fecha del 5 y "Cada mes". Movilidad de S/ 200 al mes → pon S/ 10 y "días laborables".</p>
+      </div>
     </div>
     <button type="submit" class="btn primary">Guardar</button>
   </form>
 </div>
+
+<div id="adjust" class="modal">
+  <form id="adjust-form" class="sheet">
+    <div class="sheet-head"><h2 id="adjust-title">Ajustar saldo</h2><button type="button" id="btn-close-adjust" class="icon-btn" aria-label="Cerrar">×</button></div>
+    <p id="adjust-help" class="muted"></p>
+    <label class="field">Monto real hoy (S/)<input type="number" id="adjust-amount" step="0.01" required inputmode="decimal"></label>
+    <p id="adjust-diff"><b></b></p>
+    <button type="submit" class="btn primary">Guardar ajuste</button>
+  </form>
+</div>
+
+<div id="dialog" class="modal"><div class="sheet"><p id="dialog-msg"></p><button type="button" class="btn primary" id="dialog-ok"></button><button type="button" class="btn ghost" id="dialog-cancel"></button></div></div>
 
 <div id="settings" class="modal">
   <form id="settings-form" class="sheet">

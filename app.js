@@ -23,6 +23,15 @@ const parse = s => new Date(s + 'T00:00:00');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const dShort = s => new Intl.DateTimeFormat('es-PE', { day: 'numeric', month: 'short' }).format(parse(s));
 const DAY = 864e5;
+function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.append(t); setTimeout(() => t.remove(), 3500); }
+function ask(msg, ok = 'Aceptar', cancel = 'Ahora no') {
+  return new Promise(res => {
+    $('dialog-msg').textContent = msg; $('dialog-ok').textContent = ok; $('dialog-cancel').textContent = cancel;
+    $('dialog').classList.add('active');
+    const done = v => { $('dialog').classList.remove('active'); res(v); };
+    $('dialog-ok').onclick = () => done(true); $('dialog-cancel').onclick = () => done(false);
+  });
+}
 
 /* Cada categoría tiene su color; "need"/"want" alimenta la regla 50/30/20 */
 const CATS = {
@@ -63,6 +72,7 @@ const addDays = (s, n) => { const d = parse(s); return new Date(d.getFullYear(),
 function periodOf(k, a) {
   const y = a.getFullYear(), m = a.getMonth();
   if (k === 'q') return a.getDate() <= 15 ? [iso(new Date(y, m, 1)), iso(new Date(y, m, 15))] : [iso(new Date(y, m, 16)), iso(new Date(y, m + 1, 0))];
+  if (k === 'd') return [iso(a), iso(a)];
   if (k === 'w') { const s = new Date(y, m, a.getDate() - (a.getDay() + 6) % 7); return [iso(s), iso(addDays(iso(s), 6))]; } // lunes a domingo
   return [iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0))];
 }
@@ -75,6 +85,7 @@ function getRange() {
 function periodTitle([s, e]) {
   const k = kind();
   if (k === 'all') return 'Todo el historial';
+  if (k === 'd') return new Intl.DateTimeFormat('es-PE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(state.anchor);
   if (k === 'm') return new Intl.DateTimeFormat('es-PE', { month: 'long', year: 'numeric' }).format(state.anchor);
   return `${dShort(s)} – ${dShort(e)} ${parse(e).getFullYear()}`;
 }
@@ -87,12 +98,13 @@ function shift(dir) {
 function renderSeg() {
   const items = [['p', FREQ[state.freq]]];
   if (state.freq !== 'm') items.push(['m', 'Mes']);
-  items.push(['r', 'Rango'], ['all', 'Todo']);
+  items.push(['d', 'Día'], ['r', 'Rango'], ['all', 'Todo']);
   $('mode-seg').innerHTML = items.map(([m, t]) => `<button data-mode="${m}" class="${state.mode === m ? 'on' : ''}">${t}</button>`).join('');
 }
 
 const picker = flatpickr('#range-input', {
-  mode: 'range', locale: 'es', dateFormat: 'Y-m-d', altInput: true, altFormat: 'd/m/Y', disableMobile: true,
+  mode: 'range', locale: 'es', dateFormat: 'Y-m-d', altInput: true, altInputClass: 'range-alt', altFormat: 'd/m/Y', disableMobile: true,
+  onClose: sel => { if (sel.length === 1) { state.range = [iso(sel[0]), iso(sel[0])]; state.limit = 10; render(); } }, // un solo día
   onChange: sel => { if (sel.length === 2) { state.range = [iso(sel[0]), iso(sel[1])]; state.limit = 10; render(); } }
 });
 const datePicker = flatpickr('#date', { locale: 'es', defaultDate: 'today', dateFormat: 'Y-m-d', altInput: true, altFormat: 'd/m/Y', disableMobile: true });
@@ -100,6 +112,7 @@ const datePicker = flatpickr('#date', { locale: 'es', defaultDate: 'today', date
 $('mode-seg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   state.mode = b.dataset.mode; state.limit = 10;
+  if (state.mode === 'd') state.anchor = new Date();
   if (state.mode === 'r' && !state.range) state.range = periodOf(state.freq, new Date());
   render();
   if (state.mode === 'r') picker.open();
@@ -113,8 +126,9 @@ onAuthStateChanged(auth, user => {
   state.user = user;
   $('login-screen').classList.toggle('active', !user);
   $('app-screen').classList.toggle('active', !!user);
+  $('boot').classList.add('off');
   state.unsubs.forEach(u => u()); state.unsubs = [];
-  if (!user) return;
+  if (!user) { state.txs = []; window.scrollTo(0, 0); return; }
   $('user-name').textContent = user.displayName || 'Usuario';
   $('user-avatar').src = user.photoURL || '';
   // Configuración del usuario (frecuencia de ingreso). Sin configurar = mensual.
@@ -129,23 +143,31 @@ onAuthStateChanged(auth, user => {
     state.txs = snap.docs.map(d => normalize({ id: d.id, ...d.data() })).filter(t => !t.hidden)
       .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
     genFixed(); render();
-  }, err => { console.error(err); alert('No se pudieron cargar los datos. Revisa las reglas de Firestore.'); }));
+  }, err => { console.error(err); toast('No se pudieron cargar los datos. Revisa las reglas de Firestore.'); }));
 });
-$('btn-login').onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => alert('Error al iniciar sesión: ' + e.message));
+$('btn-login').onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => toast('Error al iniciar sesión: ' + e.message));
 $('btn-logout').onclick = () => signOut(auth);
 
-/* Gastos fijos: genera todas las repeticiones pendientes hasta hoy, con ID determinista (sin duplicados) */
+/* Gastos fijos: fechas de repetición de una plantilla en el rango (from, to]. El monto es por cada vez. */
+function occurrences(t, from, to) {
+  const out = [], b = parse(t.date), r = t.repeticion;
+  for (let i = 1; i <= 800; i++) {
+    const d = r === 'mensual'
+      ? new Date(b.getFullYear(), b.getMonth() + i, Math.min(b.getDate(), new Date(b.getFullYear(), b.getMonth() + i + 1, 0).getDate()))
+      : new Date(b.getFullYear(), b.getMonth(), b.getDate() + i * (r === 'semanal' ? 7 : r === 'quincenal' ? 15 : 1));
+    const ds = iso(d); if (ds > to) break;
+    if (ds <= from || (r === 'laboral' && (d.getDay() === 0 || d.getDay() === 6))) continue;
+    out.push(ds);
+  }
+  return out;
+}
+/* Crea las repeticiones pendientes hasta hoy, con ID determinista (sin duplicados) */
 function genFixed() {
   const today = iso(new Date()), seen = new Set();
   state.txs.forEach(t => { if (t.parentId) seen.add(`${t.parentId}|${t.date}`).add(`${t.parentId}|${t.date.slice(0, 7)}`); });
   for (const t of state.txs) {
     if (t.type !== 'expense' || !t.esFijo || t.parentId) continue;
-    const b = parse(t.date);
-    for (let i = 1; i <= 240; i++) {
-      const d = t.repeticion === 'mensual'
-        ? new Date(b.getFullYear(), b.getMonth() + i, Math.min(b.getDate(), new Date(b.getFullYear(), b.getMonth() + i + 1, 0).getDate()))
-        : new Date(b.getFullYear(), b.getMonth(), b.getDate() + i * (t.repeticion === 'semanal' ? 7 : 15));
-      const ds = iso(d); if (ds > today) break;
+    for (const ds of occurrences(t, t.date, today)) {
       const id = `${t.id}_${ds}`;
       if (state.allIds.has(id) || seen.has(`${t.id}|${t.repeticion === 'mensual' ? ds.slice(0, 7) : ds}`)) continue;
       state.allIds.add(id);
@@ -194,33 +216,46 @@ $('settings-form').addEventListener('submit', async e => {
   for (const k of ['expense', 'income']) {
     const seen = new Set();
     clean[k] = draft[k].map(c => ({ ...c, n: c.n.trim() })).filter(c => c.n && !seen.has(c.n.toLowerCase()) && seen.add(c.n.toLowerCase()));
-    if (!clean[k].length) return alert('Necesitas al menos una categoría de ' + (k === 'expense' ? 'gasto' : 'ingreso') + '.');
+    if (!clean[k].length) return toast('Necesitas al menos una categoría de ' + (k === 'expense' ? 'gasto' : 'ingreso') + '.');
   }
   state.freq = document.querySelector('input[name=freq]:checked').value;
   state.mode = 'p'; state.anchor = new Date(); state.limit = 10;
   applyCats(clean);
   $('settings').classList.remove('active'); render();
   try { await setDoc(doc(db, 'users', state.user.uid), { payFreq: state.freq, cats: clean }, { merge: true }); }
-  catch (err) { console.error(err); alert('No se pudo guardar tu configuración.'); }
+  catch (err) { console.error(err); toast('No se pudo guardar tu configuración.'); }
 });
 
-/* Ajustar un saldo al valor real (crea un movimiento de corrección: no es ingreso ni gasto) */
-async function adjustBalance(target) {
-  const b = balances(state.txs), cur = target === 'wallet' ? b.w : b.f;
-  const msg = target === 'wallet' ? '¿Cuánto dinero tienes realmente disponible hoy (efectivo y cuentas, sin contar tu fondo)? (S/)' : '¿Cuánto hay realmente en tu fondo de ahorro hoy? (S/)';
-  const raw = prompt(msg, cur.toFixed(2));
-  if (raw === null) return;
-  const real = parseFloat(raw.replace(',', '.'));
-  if (isNaN(real)) return alert('Ingresa un monto válido.');
-  if (target === 'fund' && real < 0) return alert('El fondo no puede ser negativo.');
-  const diff = Math.round((real - cur) * 100) / 100;
+/* Ajustar un saldo al valor real (movimiento de corrección: no es ingreso ni gasto) */
+let adjTarget = 'wallet';
+const adjCur = () => { const b = balances(state.txs); return adjTarget === 'wallet' ? b.w : b.f; };
+function updateDiff() {
+  const v = parseFloat($('adjust-amount').value), d = Math.round((v - adjCur()) * 100) / 100;
+  $('adjust-diff').textContent = isNaN(v) ? '' : d === 0 ? 'Sin cambios.' : `Se registrará un ajuste de ${d > 0 ? '+' : '−'}${fmt(Math.abs(d))}.`;
+}
+function openAdjust(target) {
+  adjTarget = target;
+  $('adjust-title').textContent = target === 'wallet' ? 'Ajustar saldo disponible' : 'Ajustar fondo de ahorro';
+  $('adjust-help').textContent = `Según la app tienes ${fmt(adjCur())}. Escribe cuánto tienes realmente ${target === 'wallet' ? '(efectivo y cuentas, sin contar tu fondo)' : 'guardado'} y registraremos la diferencia como corrección. No cuenta como ingreso ni gasto.`;
+  $('adjust-amount').value = adjCur().toFixed(2);
+  updateDiff(); $('adjust').classList.add('active');
+}
+$('adjust-amount').oninput = updateDiff;
+$('btn-close-adjust').onclick = () => $('adjust').classList.remove('active');
+$('btn-adjust').onclick = () => openAdjust('fund');
+$('btn-adjust-wallet').onclick = () => openAdjust('wallet');
+$('adjust-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const real = parseFloat($('adjust-amount').value);
+  if (isNaN(real) || (adjTarget === 'fund' && real < 0)) return toast('Ingresa un monto válido.');
+  const diff = Math.round((real - adjCur()) * 100) / 100;
+  $('adjust').classList.remove('active');
   if (!diff) return;
   try {
-    await addDoc(collection(db, 'transactions'), { userId: state.user.uid, type: 'adjust', target, amount: diff, date: iso(new Date()), category: target === 'wallet' ? 'Ajuste del saldo' : 'Ajuste del fondo', subcategory: 'Corrección de saldo', paymentMethod: '', source: target, createdAt: serverTimestamp() });
-  } catch (err) { console.error(err); alert('No se pudo ajustar el saldo.'); }
-}
-$('btn-adjust').onclick = () => adjustBalance('fund');
-$('btn-adjust-wallet').onclick = () => adjustBalance('wallet');
+    await addDoc(collection(db, 'transactions'), { userId: state.user.uid, type: 'adjust', target: adjTarget, amount: diff, date: iso(new Date()), category: adjTarget === 'wallet' ? 'Ajuste del saldo' : 'Ajuste del fondo', subcategory: 'Corrección de saldo', paymentMethod: '', source: adjTarget, createdAt: serverTimestamp() });
+    toast('Saldo ajustado.');
+  } catch (err) { console.error(err); toast('No se pudo ajustar el saldo.'); }
+});
 
 /* ---------- Cálculos ---------- */
 function balances(txs) {
@@ -245,13 +280,13 @@ function render() {
   renderSeg();
   const [s, e] = getRange();
   $('period-title').textContent = periodTitle([s, e]);
-  $('range-input').style.display = state.mode === 'r' ? 'block' : 'none';
+  $('period-center').classList.toggle('range-on', state.mode === 'r');
   if (state.mode === 'r') picker.setDate(state.range, false);
-  const nav = ['m', 'q', 'w'].includes(kind());
+  const nav = ['m', 'q', 'w', 'd'].includes(kind());
   $('btn-prev').style.visibility = $('btn-next').style.visibility = nav ? 'visible' : 'hidden';
 
   const inRange = state.txs.filter(t => t.date >= s && t.date <= e);
-  let income = 0, expense = 0, saved = 0, needs = 0, wants = 0, walletExp = 0;
+  let income = 0, expense = 0, saved = 0, needs = 0, wants = 0, walletExp = 0, fixedW = 0, varW = 0;
   const byCat = {};
   for (const t of inRange) {
     if (t.type === 'income') income += t.amount;
@@ -260,7 +295,7 @@ function render() {
     else if (t.type === 'adjust') continue;
     else {
       expense += t.amount;
-      if (t.source !== 'fund') walletExp += t.amount;
+      if (t.source !== 'fund') { walletExp += t.amount; t.esFijo ? fixedW += t.amount : varW += t.amount; }
       byCat[t.category] = (byCat[t.category] || 0) + t.amount;
       CATS.expense[t.category]?.[1] === 'need' ? needs += t.amount : wants += t.amount;
     }
@@ -280,11 +315,13 @@ function render() {
   ].join('');
 
   const today = iso(new Date());
-  if (nav && today >= s && today <= e && walletExp > 0) {
+  if (['m', 'q', 'w'].includes(kind()) && today >= s && today <= e && (walletExp > 0 || income > 0)) {
     const passed = Math.round((parse(today) - parse(s)) / DAY) + 1, total = Math.round((parse(e) - parse(s)) / DAY) + 1;
-    const avg = walletExp / passed;
-    $('projection').innerHTML = `Gastas <b>${fmt(avg)}</b> al día. Al ritmo actual, cerrarás el periodo con <b>${fmt(income - avg * total)}</b> de lo que ingresó.`;
-  } else $('projection').textContent = income > 0 ? 'Meta de ahorro: ' + fmt(income * .2) + ' en este periodo.' : 'Registra un ingreso para calcular tus metas.';
+    const avg = varW / passed; // solo gastos variables: los fijos cuentan únicamente en sus fechas
+    const upcoming = state.txs.filter(t => t.type === 'expense' && t.esFijo && !t.parentId && t.source !== 'fund')
+      .reduce((a, t) => a + occurrences(t, today, e).length * t.amount, 0);
+    $('projection').innerHTML = `Gastos variables: <b>${fmt(avg)}</b> al día. Fijos del periodo: <b>${fmt(fixedW + upcoming)}</b> (solo en sus fechas). Proyección de cierre: <b>${fmt(income - fixedW - upcoming - avg * total)}</b>.`;
+  } else $('projection').textContent = kind() === 'all' ? 'Esta vista suma todo tu historial. Para evaluar tu 50/30/20 mira un mes o un rango concreto.' : income > 0 ? 'Meta de ahorro: ' + fmt(income * .2) + ' en este periodo.' : 'Registra un ingreso para calcular tus metas.';
 
   renderChart(byCat);
   renderFilter();
@@ -353,7 +390,7 @@ $('btn-more').onclick = () => { state.limit += 10; render(); };
 $('tx-list').addEventListener('click', async e => {
   const ed = e.target.closest('[data-edit]'), del = e.target.closest('[data-del]');
   if (ed) openModal(null, state.txs.find(t => t.id === ed.dataset.edit));
-  if (del && confirm('¿Eliminar este registro?')) {
+  if (del && await ask('¿Eliminar este registro?', 'Eliminar', 'Cancelar')) {
     const t = state.txs.find(x => x.id === del.dataset.del), ref = doc(db, 'transactions', del.dataset.del);
     // Los gastos fijos autogenerados se ocultan (si se borraran, volverían a generarse)
     t?.parentId ? await updateDoc(ref, { hidden: true }) : await deleteDoc(ref);
@@ -369,7 +406,7 @@ function applyType() {
   if (CATS[t]) $('category').innerHTML = Object.keys(CATS[t]).map(c => `<option>${c}</option>`).join('');
 }
 document.querySelectorAll('input[name=type]').forEach(r => r.onchange = applyType);
-$('fixed').onchange = e => $('repeat').hidden = !e.target.checked;
+$('fixed').onchange = e => $('repeat-box').hidden = !e.target.checked;
 
 function openModal(type, tx) {
   state.editing = tx?.id || null;
@@ -383,7 +420,7 @@ function openModal(type, tx) {
     $('method').value = tx.paymentMethod || 'Efectivo'; $('source').value = tx.source || 'wallet';
     $('fixed').checked = !!tx.esFijo; $('repeat').value = tx.repeticion || 'mensual';
   }
-  $('repeat').hidden = !$('fixed').checked;
+  $('repeat-box').hidden = !$('fixed').checked;
   $('modal').classList.add('active');
 }
 const closeModal = () => $('modal').classList.remove('active');
@@ -411,10 +448,10 @@ $('tx-form').addEventListener('submit', async e => {
       // Buena práctica: págate primero. Sugerir el 20% al registrar un ingreso.
       if (type === 'income') {
         const part = Math.round(amount * 20) / 100;
-        if (confirm(`Regla del 20%: ¿pasar ${fmt(part)} a tu fondo de ahorro ahora?`))
+        if (await ask(`Regla del 20%: ¿pasar ${fmt(part)} a tu fondo de ahorro ahora?`, 'Sí, guardar', 'Ahora no'))
           await addDoc(collection(db, 'transactions'), { ...data, type: 'deposit', amount: part, category: 'Fondo de ahorro', subcategory: 'Ahorro 20%', paymentMethod: '', source: 'wallet', createdAt: serverTimestamp() });
       }
     }
     closeModal();
-  } catch (err) { console.error(err); alert('No se pudo guardar. Intenta de nuevo.'); }
+  } catch (err) { console.error(err); toast('No se pudo guardar. Intenta de nuevo.'); }
 });
