@@ -139,3 +139,18 @@ body{min-height:100dvh;overflow-x:hidden}
 #jump-input{position:absolute;left:0;right:0;bottom:0;height:1px;opacity:0;pointer-events:none;border:0;padding:0}
 #stats-note{margin-top:10px;text-align:center;font-size:.78rem}
 #period-center{position:relative}
+
+/* ancho: nada debe empujar el diseño fuera de la pantalla del celular */
+.content{grid-template-columns:minmax(0,1fr)}
+.wallets{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
+.stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+.panel,.wallet{min-width:0}
+.wallet h1,.wallet h2,.stats b{overflow-wrap:anywhere}
+.bar-row .top{flex-wrap:wrap}
+/* comparativo */
+.cmp-total{font-size:1.5rem;font-weight:800;margin:8px 0 10px}
+.cmp-total small{font-size:.85rem;font-weight:600;color:var(--muted)}
+.cmp-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:.9rem}
+.cmp-row i{width:12px;height:12px;border-radius:4px}
+.cmp-row small{color:var(--muted);font-size:.72rem}
+#insights{margin:12px 0 8px 18px;display:grid;gap:6px;font-size:.9rem}

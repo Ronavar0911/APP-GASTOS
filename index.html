@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#1d4ed8">
 </head>
 <body>
@@ -76,6 +77,14 @@
     <section class="panel">
       <h3>Gastos por categoría</h3>
       <div class="chart-box"><canvas id="chart"></canvas></div>
+    </section>
+
+    <section class="panel" id="compare-panel">
+      <h3>Comparativo con el periodo anterior</h3>
+      <p id="compare-sub" class="muted"></p>
+      <div id="compare-body"></div>
+      <ul id="insights"></ul>
+      <p class="muted">Orientación general calculada con tus propios datos; no es asesoría financiera.</p>
     </section>
 
     <section class="panel">

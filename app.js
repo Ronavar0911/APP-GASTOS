@@ -373,8 +373,43 @@ function render() {
     : C.income > 0 ? 'Meta de ahorro: ' + fmt(C.income * .2) + ' en este periodo.' : 'Registra un ingreso para calcular tus metas.';
 
   renderChart(R.byCat);
+  renderCompare(s, e, today, C);
   renderFilter();
   renderList(inRange);
+}
+
+/* ---------- Comparativo con el periodo anterior ---------- */
+function renderCompare(s, e, today, C) {
+  const k = kind(), box = $('compare-panel');
+  box.hidden = k === 'all';
+  if (k === 'all') return;
+  const len = Math.round((parse(e) - parse(s)) / DAY) + 1;
+  let ps, pe;
+  if (k === 'm') { const d = parse(s); ps = iso(new Date(d.getFullYear(), d.getMonth() - 1, 1)); pe = iso(new Date(d.getFullYear(), d.getMonth(), 0)); }
+  else if (k === 'q' || k === 'w') [ps, pe] = periodOf(k, addDays(s, -1));
+  else { ps = iso(addDays(s, -len)); pe = iso(addDays(s, -1)); }
+  // Periodo en curso: se compara con los MISMOS días del anterior, para que sea justo
+  const live = today >= s && today < e, ce = live ? today : e;
+  const pcap = live ? iso(new Date(Math.min(addDays(ps, Math.round((parse(today) - parse(s)) / DAY)), parse(pe)))) : pe;
+  const A = summarize(state.txs.filter(t => t.date >= s && t.date <= ce)), B = summarize(state.txs.filter(t => t.date >= ps && t.date <= pcap));
+  $('compare-sub').textContent = `${dShort(s)} – ${dShort(ce)} frente a ${dShort(ps)} – ${dShort(pcap)}${live ? ' (mismos días, periodo en curso)' : ''}`;
+  if (!A.expense && !B.expense) { $('compare-body').innerHTML = '<div class="empty">Aún no hay gastos para comparar.</div>'; $('insights').innerHTML = ''; return; }
+  const diff = A.expense - B.expense, pct = B.expense ? diff / B.expense * 100 : null;
+  const cats = [...new Set([...Object.keys(A.byCat), ...Object.keys(B.byCat)])]
+    .map(c => ({ c, a: A.byCat[c] || 0, b: B.byCat[c] || 0 })).sort((x, y) => Math.abs(y.a - y.b) - Math.abs(x.a - x.b));
+  $('compare-body').innerHTML = `<div class="cmp-total ${diff > 0 ? 'neg' : 'pos'}">${diff > 0 ? '▲' : diff < 0 ? '▼' : '='} ${fmt(Math.abs(diff))}${pct === null ? '' : ` (${pct > 0 ? '+' : ''}${pct.toFixed(0)}%)`}<small> ${diff > 0 ? 'más' : 'menos'} que en el periodo anterior</small></div>` +
+    cats.slice(0, 6).map(x => { const d = x.a - x.b; return `<div class="cmp-row"><i style="background:${CATS.expense[x.c]?.[0] || '#94a3b8'}"></i><span>${esc(x.c)}</span><small>${fmt(x.b)} → ${fmt(x.a)}</small><b class="${d > 0 ? 'neg' : d < 0 ? 'pos' : ''}">${d > 0 ? '+' : d < 0 ? '−' : ''}${fmt(Math.abs(d))}</b></div>`; }).join('');
+  // Recomendaciones calculadas localmente (sin enviar tus datos a ningún servicio)
+  const tips = [], up = cats.find(x => x.a - x.b > 20), down = cats.find(x => x.b - x.a > 20), pc = v => (v / C.income * 100).toFixed(0);
+  if (up) tips.push(`Lo que más subió: ${up.c} (+${fmt(up.a - up.b)}). Revisa si fue algo puntual o se está volviendo costumbre.`);
+  if (down) tips.push(`Buen avance en ${down.c}: gastaste ${fmt(down.b - down.a)} menos.`);
+  if (C.income > 0) {
+    if (C.needs > C.income * .5) tips.push(`Tus necesidades llegan al ${pc(C.needs)}% de tu ingreso (lo sano es 50%). Revisa primero los gastos fijos.`);
+    if (C.wants > C.income * .3) tips.push(`Tus gustos llegan al ${pc(C.wants)}% (lo sano es 30%): es donde es más fácil ajustar.`);
+    if (!live && C.saved < C.income * .2) tips.push(`Ahorraste el ${pc(Math.max(C.saved, 0))}% de tu ingreso; la meta es 20%. Al cobrar, transfiere primero al fondo y luego gasta.`);
+  }
+  if (!tips.length) tips.push('Sin alertas por ahora. Sigue registrando tus gastos el mismo día.');
+  $('insights').innerHTML = tips.slice(0, 4).map(t => `<li>${esc(t)}</li>`).join('');
 }
 
 function barRow(label, v, target, color, isLimit) {
