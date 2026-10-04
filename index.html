@@ -113,7 +113,10 @@
       <label class="check"><input type="checkbox" id="fixed"> Gasto fijo (se repite)</label>
       <div id="repeat-box" hidden>
         <select id="repeat"><option value="mensual">Cada mes (el día de la fecha elegida)</option><option value="quincenal">Cada 15 días</option><option value="semanal">Cada semana</option><option value="laboral">Todos los días laborables (lun–vie)</option><option value="diario">Todos los días</option></select>
-        <p class="muted">El monto es por cada vez. Ej.: pago de tarjeta el día 5 → elige la fecha del 5 y "Cada mes". Movilidad de S/ 200 al mes → pon S/ 10 y "días laborables".</p>
+        <label class="field" id="mode-box" hidden>¿Cómo se aplica el monto?
+          <select id="fixed-mode"><option value="vez">Es el monto de cada vez</option><option value="total">Es el total del mes: repartirlo entre los días</option></select>
+        </label>
+        <p class="muted" id="fixed-help"></p>
       </div>
     </div>
     <button type="submit" class="btn primary">Guardar</button>

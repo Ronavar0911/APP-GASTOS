@@ -148,9 +148,37 @@ onAuthStateChanged(auth, user => {
 $('btn-login').onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => toast('Error al iniciar sesión: ' + e.message));
 $('btn-logout').onclick = () => signOut(auth);
 
-/* Gastos fijos: fechas de repetición de una plantilla en el rango (from, to]. El monto es por cada vez. */
+/* ---------- Gastos fijos ----------
+   modoFijo 'vez'  : el monto se registra completo en cada repetición.
+   modoFijo 'total': el monto es el total del MES y se reparte en partes iguales entre los días del patrón (laboral, diario, semanal). */
+const SPLITTABLE = ['laboral', 'diario', 'semanal'];
+const isSplit = t => t.modoFijo === 'total' && SPLITTABLE.includes(t.repeticion);
+const matchDay = (t, d) => t.repeticion === 'laboral' ? d.getDay() % 6 !== 0 : t.repeticion === 'semanal' ? d.getDay() === parse(t.date).getDay() : true;
+function monthDates(t, y, m) {
+  const out = [];
+  for (let d = 1, n = new Date(y, m + 1, 0).getDate(); d <= n; d++) { const dt = new Date(y, m, d); if (matchDay(t, dt)) out.push(iso(dt)); }
+  return out;
+}
+// Si la fecha cae en un día que no corresponde al patrón (p. ej. sábado en "laborables"), se mueve al siguiente día que sí corresponde.
+function snapDate(t) {
+  for (let i = 0; i <= 7; i++) { const ds = iso(addDays(t.date, i)); if (matchDay(t, parse(ds))) return ds; }
+  return t.date;
+}
+function shareOf(t, ds) {
+  if (!isSplit(t)) return t.amount;
+  return Math.round(t.total / monthDates(t, +ds.slice(0, 4), +ds.slice(5, 7) - 1).length * 100) / 100;
+}
+// Fechas (después de from, hasta to) donde se registra la repetición. No incluye la fecha de la propia plantilla.
 function occurrences(t, from, to) {
   const out = [], b = parse(t.date), r = t.repeticion;
+  if (isSplit(t)) { // todo el mes de la plantilla, incluidos los días anteriores a su fecha
+    for (let k = 0; k < 120; k++) {
+      const y = b.getFullYear(), m = b.getMonth() + k;
+      if (iso(new Date(y, m, 1)) > to) break;
+      for (const ds of monthDates(t, y, m)) if (ds > from && ds <= to && ds !== t.date) out.push(ds);
+    }
+    return out;
+  }
   for (let i = 1; i <= 800; i++) {
     const d = r === 'mensual'
       ? new Date(b.getFullYear(), b.getMonth() + i, Math.min(b.getDate(), new Date(b.getFullYear(), b.getMonth() + i + 1, 0).getDate()))
@@ -167,12 +195,12 @@ function genFixed() {
   state.txs.forEach(t => { if (t.parentId) seen.add(`${t.parentId}|${t.date}`).add(`${t.parentId}|${t.date.slice(0, 7)}`); });
   for (const t of state.txs) {
     if (t.type !== 'expense' || !t.esFijo || t.parentId) continue;
-    for (const ds of occurrences(t, t.date, today)) {
+    for (const ds of occurrences(t, isSplit(t) ? '0000-00-00' : t.date, today)) {
       const id = `${t.id}_${ds}`;
       if (state.allIds.has(id) || seen.has(`${t.id}|${t.repeticion === 'mensual' ? ds.slice(0, 7) : ds}`)) continue;
       state.allIds.add(id);
       const { id: _i, createdAt, ...rest } = t;
-      setDoc(doc(db, 'transactions', id), { ...rest, date: ds, parentId: t.id, createdAt: serverTimestamp() }).catch(console.error);
+      setDoc(doc(db, 'transactions', id), { ...rest, date: ds, amount: shareOf(t, ds), parentId: t.id, createdAt: serverTimestamp() }).catch(console.error);
     }
   }
 }
@@ -319,7 +347,7 @@ function render() {
     const passed = Math.round((parse(today) - parse(s)) / DAY) + 1, total = Math.round((parse(e) - parse(s)) / DAY) + 1;
     const avg = varW / passed; // solo gastos variables: los fijos cuentan únicamente en sus fechas
     const upcoming = state.txs.filter(t => t.type === 'expense' && t.esFijo && !t.parentId && t.source !== 'fund')
-      .reduce((a, t) => a + occurrences(t, today, e).length * t.amount, 0);
+      .reduce((a, t) => a + occurrences(t, today, e).reduce((x, ds) => x + shareOf(t, ds), 0), 0);
     $('projection').innerHTML = `Gastos variables: <b>${fmt(avg)}</b> al día. Fijos del periodo: <b>${fmt(fixedW + upcoming)}</b> (solo en sus fechas). Proyección de cierre: <b>${fmt(income - fixedW - upcoming - avg * total)}</b>.`;
   } else $('projection').textContent = kind() === 'all' ? 'Esta vista suma todo tu historial. Para evaluar tu 50/30/20 mira un mes o un rango concreto.' : income > 0 ? 'Meta de ahorro: ' + fmt(income * .2) + ' en este periodo.' : 'Registra un ingreso para calcular tus metas.';
 
@@ -406,7 +434,21 @@ function applyType() {
   if (CATS[t]) $('category').innerHTML = Object.keys(CATS[t]).map(c => `<option>${c}</option>`).join('');
 }
 document.querySelectorAll('input[name=type]').forEach(r => r.onchange = applyType);
-$('fixed').onchange = e => $('repeat-box').hidden = !e.target.checked;
+const REP_TXT = { laboral: 'cada día laborable (lun–vie)', diario: 'todos los días', semanal: 'cada semana', quincenal: 'cada 15 días' };
+function updateFixedUI() {
+  const on = $('fixed').checked, rep = $('repeat').value, canSplit = SPLITTABLE.includes(rep);
+  $('repeat-box').hidden = !on; $('mode-box').hidden = !canSplit;
+  if (!on) return;
+  const amt = parseFloat($('amount').value) || 0, date = $('date').value || iso(new Date()), money = fmt(amt);
+  let txt;
+  if (rep === 'mensual') txt = `Se registrará ${money} el día ${parse(date).getDate()} de cada mes.`;
+  else if (canSplit && $('fixed-mode').value === 'total') {
+    const t = { repeticion: rep, date, modoFijo: 'total', total: amt }, sd = snapDate(t);
+    txt = `Los ${money} son el total de cada mes y se reparten en partes iguales entre ${rep === 'laboral' ? 'los días laborables' : rep === 'diario' ? 'todos los días' : 'las semanas'} del mes (≈ ${fmt(shareOf({ ...t, date: sd }, sd))} por día este mes).`;
+  } else txt = `Se registrará ${money} ${REP_TXT[rep]} desde la fecha elegida.`;
+  $('fixed-help').textContent = txt;
+}
+['fixed', 'repeat', 'fixed-mode', 'amount', 'date'].forEach(id => ['input', 'change'].forEach(ev => $(id).addEventListener(ev, updateFixedUI)));
 
 function openModal(type, tx) {
   state.editing = tx?.id || null;
@@ -419,8 +461,10 @@ function openModal(type, tx) {
     $('amount').value = tx.amount; if (CATS[tx.type] && !CATS[tx.type][tx.category]) $('category').add(new Option(tx.category)); $('category').value = tx.category; $('note').value = tx.subcategory || tx.note || '';
     $('method').value = tx.paymentMethod || 'Efectivo'; $('source').value = tx.source || 'wallet';
     $('fixed').checked = !!tx.esFijo; $('repeat').value = tx.repeticion || 'mensual';
+    $('fixed-mode').value = tx.modoFijo || 'vez';
+    if (tx.modoFijo === 'total' && !tx.parentId) $('amount').value = tx.total; // se edita el total mensual, no la parte
   }
-  $('repeat-box').hidden = !$('fixed').checked;
+  updateFixedUI();
   $('modal').classList.add('active');
 }
 const closeModal = () => $('modal').classList.remove('active');
@@ -441,6 +485,17 @@ $('tx-form').addEventListener('submit', async e => {
     esFijo: type === 'expense' && $('fixed').checked,
     repeticion: type === 'expense' && $('fixed').checked ? $('repeat').value : null
   };
+  const isChild = state.editing && state.txs.find(x => x.id === state.editing)?.parentId; // repeticiones generadas: no redefinen la regla
+  if (isChild) { delete data.esFijo; delete data.repeticion; }
+  else if (data.esFijo) {
+    const split = SPLITTABLE.includes(data.repeticion) && $('fixed-mode').value === 'total';
+    Object.assign(data, { modoFijo: split ? 'total' : 'vez', total: split ? amount : null });
+    if (split) {
+      data.date = snapDate(data);
+      data.amount = shareOf(data, data.date);
+      if (data.date !== date) toast('La fecha se movió al siguiente día que corresponde (' + dShort(data.date) + ').');
+    }
+  } else Object.assign(data, { modoFijo: null, total: null });
   try {
     if (state.editing) await updateDoc(doc(db, 'transactions', state.editing), data);
     else {
