@@ -56,7 +56,7 @@
       <div class="seg" id="mode-seg"></div>
       <div class="period-nav">
         <button id="btn-prev" class="icon-btn" aria-label="Anterior">‹</button>
-        <div id="period-center"><strong id="period-title">—</strong><input id="range-input" placeholder="Elige un día o un rango" readonly></div>
+        <div id="period-center"><button type="button" id="period-title" class="title-btn">—</button><input id="jump-input" tabindex="-1" aria-hidden="true"><input id="range-input" placeholder="Elige un día o un rango" readonly></div>
         <button id="btn-next" class="icon-btn" aria-label="Siguiente">›</button>
       </div>
       <div class="stats">
@@ -64,6 +64,7 @@
         <div><small>Gastos</small><b id="s-expense" class="neg">S/ 0.00</b></div>
         <div><small>Ahorrado</small><b id="s-saved" class="sav">S/ 0.00</b></div>
       </div>
+      <p id="stats-note" class="muted"></p>
     </section>
 
     <section class="panel">

@@ -109,6 +109,13 @@ const picker = flatpickr('#range-input', {
 });
 const datePicker = flatpickr('#date', { locale: 'es', defaultDate: 'today', dateFormat: 'Y-m-d', altInput: true, altFormat: 'd/m/Y', disableMobile: true });
 
+// Saltar directo a cualquier fecha tocando el título del periodo
+const jump = flatpickr('#jump-input', {
+  locale: 'es', clickOpens: false, disableMobile: true,
+  onChange: sel => { if (sel[0]) { state.anchor = sel[0]; state.limit = 10; render(); } }
+});
+$('period-title').onclick = () => { jump.setDate(state.anchor, false); jump.open(); };
+
 $('mode-seg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   state.mode = b.dataset.mode; state.limit = 10;
@@ -299,6 +306,23 @@ function balances(txs) {
 }
 
 /* ---------- Render ---------- */
+function summarize(list) {
+  const r = { income: 0, expense: 0, saved: 0, needs: 0, wants: 0, walletExp: 0, fixedW: 0, varW: 0, byCat: {} };
+  for (const t of list) {
+    if (t.type === 'income') r.income += t.amount;
+    else if (t.type === 'deposit') r.saved += t.amount;
+    else if (t.type === 'withdraw') r.saved -= t.amount;
+    else if (t.type === 'adjust') continue;
+    else {
+      r.expense += t.amount;
+      if (t.source !== 'fund') { r.walletExp += t.amount; t.esFijo ? r.fixedW += t.amount : r.varW += t.amount; }
+      r.byCat[t.category] = (r.byCat[t.category] || 0) + t.amount;
+      CATS.expense[t.category]?.[1] === 'need' ? r.needs += t.amount : r.wants += t.amount;
+    }
+  }
+  return r;
+}
+
 function render() {
   const { w, f } = balances(state.txs);
   $('wallet-balance').textContent = fmt(w);
@@ -306,52 +330,49 @@ function render() {
   $('wallet-hint').textContent = w < 0 ? 'Saldo negativo: si cubriste con tu fondo, regístralo con "Retirar".' : `Patrimonio total: ${fmt(w + f)}`;
 
   renderSeg();
-  const [s, e] = getRange();
-  $('period-title').textContent = periodTitle([s, e]);
+  const [s, e] = getRange(), title = periodTitle([s, e]), today = iso(new Date());
+  const jumpable = !['r', 'all'].includes(kind());
+  $('period-title').textContent = title + (jumpable ? ' ▾' : '');
+  $('period-title').disabled = !jumpable;
   $('period-center').classList.toggle('range-on', state.mode === 'r');
   if (state.mode === 'r') picker.setDate(state.range, false);
   const nav = ['m', 'q', 'w', 'd'].includes(kind());
   $('btn-prev').style.visibility = $('btn-next').style.visibility = nav ? 'visible' : 'hidden';
 
   const inRange = state.txs.filter(t => t.date >= s && t.date <= e);
-  let income = 0, expense = 0, saved = 0, needs = 0, wants = 0, walletExp = 0, fixedW = 0, varW = 0;
-  const byCat = {};
-  for (const t of inRange) {
-    if (t.type === 'income') income += t.amount;
-    else if (t.type === 'deposit') saved += t.amount;
-    else if (t.type === 'withdraw') saved -= t.amount;
-    else if (t.type === 'adjust') continue;
-    else {
-      expense += t.amount;
-      if (t.source !== 'fund') { walletExp += t.amount; t.esFijo ? fixedW += t.amount : varW += t.amount; }
-      byCat[t.category] = (byCat[t.category] || 0) + t.amount;
-      CATS.expense[t.category]?.[1] === 'need' ? needs += t.amount : wants += t.amount;
-    }
-  }
-  $('s-income').textContent = fmt(income);
-  $('s-expense').textContent = fmt(expense);
-  $('s-saved').textContent = fmt(saved);
-  const net = income - walletExp - saved; // lo que ingresó menos lo que salió del saldo en el periodo
-  $('period-label').textContent = 'Saldo del periodo · ' + periodTitle([s, e]);
+  const R = summarize(inRange); // lo ocurrido en la vista elegida
+  // Si la vista (un día, una semana, un rango…) cae dentro de un ciclo de pago, el saldo y la regla 50/30/20
+  // se calculan con todo ese ciclo hasta la fecha final: el sueldo del día 1 sigue financiando el resto del mes.
+  const cyc = periodOf(state.freq, parse(kind() === 'all' ? today : e));
+  const sub = kind() !== 'all' && s >= cyc[0] && e <= cyc[1] && !(s === cyc[0] && e === cyc[1]);
+  const C = sub ? summarize(state.txs.filter(t => t.date >= cyc[0] && t.date <= e)) : R;
+
+  $('s-income').textContent = fmt(R.income);
+  $('s-expense').textContent = fmt(R.expense);
+  $('s-saved').textContent = fmt(R.saved);
+  $('stats-note').textContent = sub ? `Estos tres números son solo de ${title}. El saldo del ciclo y la regla 50/30/20 usan todo el ciclo (${dShort(cyc[0])} – ${dShort(cyc[1])}) hasta el ${dShort(e)}.` : '';
+  const net = C.income - C.walletExp - C.saved; // ingresos del ciclo menos lo que salió del saldo
+  $('period-label').textContent = sub ? `Saldo del ciclo hasta el ${dShort(e)}` : 'Saldo del periodo · ' + title;
   $('period-balance').textContent = fmt(net);
   $('period-balance').classList.toggle('neg', net < 0);
 
   $('rule').innerHTML = [
-    barRow('Necesidades 50%', needs, income * .5, '#2563eb', true),
-    barRow('Estilo de vida 30%', wants, income * .3, '#7c3aed', true),
-    barRow('Ahorro 20%', Math.max(saved, 0), income * .2, '#06b6d4', false)
+    barRow('Necesidades 50%', C.needs, C.income * .5, '#2563eb', true),
+    barRow('Estilo de vida 30%', C.wants, C.income * .3, '#7c3aed', true),
+    barRow('Ahorro 20%', Math.max(C.saved, 0), C.income * .2, '#06b6d4', false)
   ].join('');
 
-  const today = iso(new Date());
-  if (['m', 'q', 'w'].includes(kind()) && today >= s && today <= e && (walletExp > 0 || income > 0)) {
+  if ((state.mode === 'p' || kind() === 'm') && ['m', 'q', 'w'].includes(kind()) && today >= s && today <= e && (C.walletExp > 0 || C.income > 0)) {
     const passed = Math.round((parse(today) - parse(s)) / DAY) + 1, total = Math.round((parse(e) - parse(s)) / DAY) + 1;
-    const avg = varW / passed; // solo gastos variables: los fijos cuentan únicamente en sus fechas
+    const avg = C.varW / passed; // solo gastos variables: los fijos cuentan únicamente en sus fechas
     const upcoming = state.txs.filter(t => t.type === 'expense' && t.esFijo && !t.parentId && t.source !== 'fund')
       .reduce((a, t) => a + occurrences(t, today, e).reduce((x, ds) => x + shareOf(t, ds), 0), 0);
-    $('projection').innerHTML = `Gastos variables: <b>${fmt(avg)}</b> al día. Fijos del periodo: <b>${fmt(fixedW + upcoming)}</b> (solo en sus fechas). Proyección de cierre: <b>${fmt(income - fixedW - upcoming - avg * total)}</b>.`;
-  } else $('projection').textContent = kind() === 'all' ? 'Esta vista suma todo tu historial. Para evaluar tu 50/30/20 mira un mes o un rango concreto.' : income > 0 ? 'Meta de ahorro: ' + fmt(income * .2) + ' en este periodo.' : 'Registra un ingreso para calcular tus metas.';
+    $('projection').innerHTML = `Gastos variables: <b>${fmt(avg)}</b> al día. Fijos del periodo: <b>${fmt(C.fixedW + upcoming)}</b> (solo en sus fechas). Proyección de cierre: <b>${fmt(C.income - C.fixedW - upcoming - avg * total)}</b>.`;
+  } else $('projection').textContent = kind() === 'all' ? 'Esta vista suma todo tu historial. Para evaluar tu 50/30/20 mira un mes o un rango concreto.'
+    : sub ? `Regla calculada sobre los ingresos de tu ciclo de pago (${dShort(cyc[0])} – ${dShort(cyc[1])}).`
+    : C.income > 0 ? 'Meta de ahorro: ' + fmt(C.income * .2) + ' en este periodo.' : 'Registra un ingreso para calcular tus metas.';
 
-  renderChart(byCat);
+  renderChart(R.byCat);
   renderFilter();
   renderList(inRange);
 }
