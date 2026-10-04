@@ -154,3 +154,8 @@ body{min-height:100dvh;overflow-x:hidden}
 .cmp-row i{width:12px;height:12px;border-radius:4px}
 .cmp-row small{color:var(--muted);font-size:.72rem}
 #insights{margin:12px 0 8px 18px;display:grid;gap:6px;font-size:.9rem}
+
+/* tarjetas de saldo: mismo ancho y alto */
+.wallets{grid-template-columns:repeat(2,minmax(0,1fr))}
+.wallet h2{white-space:nowrap;font-size:clamp(1.15rem,6vw,1.5rem);overflow-wrap:normal}
+.wallet.main h1{white-space:nowrap;font-size:clamp(1.3rem,6.5vw,1.9rem);overflow-wrap:normal}
