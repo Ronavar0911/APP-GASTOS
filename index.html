@@ -105,17 +105,18 @@
     <div class="types" id="types">
       <label><input type="radio" name="type" value="expense" checked><span class="t-exp">Gasto</span></label>
       <label><input type="radio" name="type" value="income"><span class="t-inc">Ingreso</span></label>
+      <label><input type="radio" name="type" value="refund"><span class="t-inc">Reembolso</span></label>
       <label><input type="radio" name="type" value="deposit"><span class="t-sav">Al fondo</span></label>
       <label><input type="radio" name="type" value="withdraw"><span class="t-sav">Del fondo</span></label>
     </div>
     <p id="type-help" class="muted"></p>
     <label class="field">Monto (S/)<input type="number" id="amount" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00"></label>
-    <label class="field" data-for="expense income">Categoría<select id="category"></select></label>
+    <label class="field" data-for="expense income refund">Categoría<select id="category"></select></label>
     <label class="field" data-for="expense">Pagar con
       <select id="source"><option value="wallet">Saldo disponible</option><option value="fund">Fondo de ahorro</option></select>
     </label>
     <label class="field">Nota<input type="text" id="note" placeholder="Ej. Almuerzo, Netflix, gasolina…"></label>
-    <label class="field" data-for="expense income">Método
+    <label class="field" data-for="expense income refund">Método
       <select id="method"><option>Efectivo</option><option>Tarjeta de Débito</option><option>Tarjeta de Crédito</option><option>Transferencia / App</option></select>
     </label>
     <label class="field">Fecha<input type="text" id="date" required></label>

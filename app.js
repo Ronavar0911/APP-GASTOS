@@ -47,14 +47,16 @@ const CATS = {
 };
 const FUND_COLOR = '#06b6d4';
 const FUND_TYPES = ['deposit', 'withdraw', 'adjust'];
-const colorOf = t => FUND_TYPES.includes(t.type) ? FUND_COLOR : (CATS[t.type]?.[t.category]?.[0] || '#94a3b8');
+const colorOf = t => FUND_TYPES.includes(t.type) ? FUND_COLOR : t.type === 'refund' ? (CATS.expense[t.category]?.[0] || '#94a3b8') : (CATS[t.type]?.[t.category]?.[0] || '#94a3b8');
 const HELP = {
   expense: 'Sale de tu saldo disponible, o de tu fondo si eliges pagar con él.',
   income: 'Suma a tu saldo disponible.',
   deposit: 'Mueve dinero del saldo al fondo. No cuenta como gasto.',
-  withdraw: 'Mueve dinero del fondo al saldo. No cuenta como ingreso.'
+  withdraw: 'Mueve dinero del fondo al saldo. No cuenta como ingreso.',
+  refund: 'Dinero que te devuelven de un gasto compartido. Entra a tu saldo, NO cuenta como ingreso y reduce ese gasto.'
 };
 const TITLES = { deposit: 'Guardado en el fondo', withdraw: 'Retiro del fondo', adjust: 'Ajuste del fondo' };
+const REFUND_NOTE = 'Reembolso';
 
 // freq: cómo recibes tu ingreso ('m' mensual por defecto, 'q' quincenal, 'w' semanal). mode: 'p' = tu periodo de pago, 'm' mes, 'r' rango, 'all' todo.
 const state = { user: null, txs: [], allIds: new Set(), freq: 'm', mode: 'p', anchor: new Date(), range: null, filter: 'all', limit: 10, editing: null, chart: null, unsubs: [] };
@@ -296,7 +298,7 @@ $('adjust-form').addEventListener('submit', async e => {
 function balances(txs) {
   let w = 0, f = 0;
   for (const t of txs) {
-    if (t.type === 'income') w += t.amount;
+    if (t.type === 'income' || t.type === 'refund') w += t.amount;
     else if (t.type === 'expense') t.source === 'fund' ? f -= t.amount : w -= t.amount;
     else if (t.type === 'deposit') { w -= t.amount; f += t.amount; }
     else if (t.type === 'withdraw') { w += t.amount; f -= t.amount; }
@@ -313,13 +315,19 @@ function summarize(list) {
     else if (t.type === 'deposit') r.saved += t.amount;
     else if (t.type === 'withdraw') r.saved -= t.amount;
     else if (t.type === 'adjust') continue;
-    else {
+    else if (t.type === 'refund') {
+      r.expense -= t.amount; r.walletExp -= t.amount; r.varW -= t.amount;
+      r.byCat[t.category] = (r.byCat[t.category] || 0) - t.amount;
+      CATS.expense[t.category]?.[1] === 'need' ? r.needs -= t.amount : r.wants -= t.amount;
+    } else {
       r.expense += t.amount;
       if (t.source !== 'fund') { r.walletExp += t.amount; t.esFijo ? r.fixedW += t.amount : r.varW += t.amount; }
       r.byCat[t.category] = (r.byCat[t.category] || 0) + t.amount;
       CATS.expense[t.category]?.[1] === 'need' ? r.needs += t.amount : r.wants += t.amount;
     }
   }
+  for (const c in r.byCat) if (r.byCat[c] <= 0.005) delete r.byCat[c]; // un reembolso mayor al gasto del periodo no debe dibujar negativos
+  r.needs = Math.max(r.needs, 0); r.wants = Math.max(r.wants, 0);
   return r;
 }
 
@@ -441,7 +449,7 @@ function renderFilter() {
   const sel = $('filter');
   if (!sel.dataset.ready) {
     const opt = (v, t) => `<option value="${v}">${t}</option>`;
-    sel.innerHTML = opt('all', 'Todo') + opt('t:income', 'Ingresos') + opt('t:expense', 'Gastos') + opt('t:fund', 'Movimientos del fondo') +
+    sel.innerHTML = opt('all', 'Todo') + opt('t:income', 'Ingresos') + opt('t:expense', 'Gastos') + opt('t:refund', 'Reembolsos') + opt('t:fund', 'Movimientos del fondo') +
       '<optgroup label="Categorías de gasto">' + Object.keys(CATS.expense).map(c => opt('c:' + c, c)).join('') + '</optgroup>' +
       '<optgroup label="Categorías de ingreso">' + Object.keys(CATS.income).map(c => opt('c:' + c, c)).join('') + '</optgroup>';
     sel.dataset.ready = 1;
@@ -458,13 +466,13 @@ function renderList(inRange) {
   if (!list.length) box.innerHTML = '<div class="empty">No hay movimientos en este periodo. Toca "+ Nuevo registro" para añadir el primero.</div>';
   else box.innerHTML = list.slice(0, state.limit).map(t => {
     const fund = FUND_TYPES.includes(t.type);
-    const sign = t.type === 'income' ? '+' : t.type === 'expense' ? '−' : t.type === 'adjust' && t.amount > 0 ? '+' : '';
-    const cls = t.type === 'income' ? 'pos' : t.type === 'expense' ? 'neg' : 'sav';
-    const icon = t.type === 'income' ? '↓' : t.type === 'expense' ? '↑' : t.type === 'deposit' ? '⇥' : t.type === 'adjust' ? '≈' : '⇤';
-    const tag = t.type === 'adjust' ? 'corrección manual' : t.type === 'deposit' ? 'saldo → fondo' : t.type === 'withdraw' ? 'fondo → saldo' : (t.source === 'fund' ? 'pagado con fondo' : '');
+    const sign = t.type === 'income' || t.type === 'refund' ? '+' : t.type === 'expense' ? '−' : t.type === 'adjust' && t.amount > 0 ? '+' : '';
+    const cls = t.type === 'income' || t.type === 'refund' ? 'pos' : t.type === 'expense' ? 'neg' : 'sav';
+    const icon = t.type === 'income' ? '↓' : t.type === 'refund' ? '↺' : t.type === 'expense' ? '↑' : t.type === 'deposit' ? '⇥' : t.type === 'adjust' ? '≈' : '⇤';
+    const tag = t.type === 'refund' ? 'reembolso (reduce gasto)' : t.type === 'adjust' ? 'corrección manual' : t.type === 'deposit' ? 'saldo → fondo' : t.type === 'withdraw' ? 'fondo → saldo' : (t.source === 'fund' ? 'pagado con fondo' : '');
     const sub = [dShort(t.date), t.subcategory || t.note, !fund && t.paymentMethod].filter(Boolean).map(esc).join(' · ');
     return `<div class="tx"><div class="dot" style="background:${colorOf(t)}">${icon}</div>
-      <div class="info"><b>${t.esFijo ? '🔒 ' : ''}${esc(t.type === 'adjust' && t.target === 'wallet' ? 'Ajuste del saldo' : TITLES[t.type] || t.category)}</b><small>${sub}</small></div>
+      <div class="info"><b>${t.esFijo ? '🔒 ' : ''}${esc(t.type === 'adjust' && t.target === 'wallet' ? 'Ajuste del saldo' : t.type === 'refund' ? 'Reembolso · ' + t.category : TITLES[t.type] || t.category)}</b><small>${sub}</small></div>
       <div class="amt ${cls}">${sign}${fmt(t.amount)}${tag ? `<small>${tag}</small>` : ''}</div>
       <div class="acts">${t.type === 'adjust' ? '' : `<button data-edit="${t.id}" aria-label="Editar">✏️</button>`}<button data-del="${t.id}" aria-label="Eliminar">🗑️</button></div></div>`;
   }).join('');
@@ -487,7 +495,7 @@ function applyType() {
   const t = typeVal();
   document.querySelectorAll('[data-for]').forEach(el => el.hidden = !el.dataset.for.split(' ').includes(t));
   $('type-help').textContent = HELP[t];
-  if (CATS[t]) $('category').innerHTML = Object.keys(CATS[t]).map(c => `<option>${c}</option>`).join('');
+  if (CATS[t] || t === 'refund') $('category').innerHTML = Object.keys(CATS[t === 'refund' ? 'expense' : t]).map(c => `<option>${c}</option>`).join('');
 }
 document.querySelectorAll('input[name=type]').forEach(r => r.onchange = applyType);
 const REP_TXT = { laboral: 'cada día laborable (lun–vie)', diario: 'todos los días', semanal: 'cada semana', quincenal: 'cada 15 días' };
@@ -514,7 +522,7 @@ function openModal(type, tx) {
   $('modal-title').textContent = tx ? 'Editar registro' : 'Nuevo registro';
   datePicker.setDate(tx?.date || new Date());
   if (tx) {
-    $('amount').value = tx.amount; if (CATS[tx.type] && !CATS[tx.type][tx.category]) $('category').add(new Option(tx.category)); $('category').value = tx.category; $('note').value = tx.subcategory || tx.note || '';
+    $('amount').value = tx.amount; if (CATS[tx.type === 'refund' ? 'expense' : tx.type] && !CATS[tx.type === 'refund' ? 'expense' : tx.type][tx.category]) $('category').add(new Option(tx.category)); $('category').value = tx.category; $('note').value = tx.subcategory || tx.note || '';
     $('method').value = tx.paymentMethod || 'Efectivo'; $('source').value = tx.source || 'wallet';
     $('fixed').checked = !!tx.esFijo; $('repeat').value = tx.repeticion || 'mensual';
     $('fixed-mode').value = tx.modoFijo || 'vez';
