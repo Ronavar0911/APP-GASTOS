@@ -320,15 +320,24 @@ function perName(d) {
   return state.freq === 'm' ? new Intl.DateTimeFormat('es-PE', { month: 'long', year: 'numeric' }).format(parse(d)) : `${dShort(a)} – ${dShort(b)}`;
 }
 const coversLater = t => COVER_TYPES.includes(t.type) && t.coverDate && t.coverDate > periodOf(state.freq, parse(t.date))[1];
+const coverLabel = t => t.type === 'income' ? 'cubre ' + perName(effDate(t)) : coversLater(t) ? 'cubre ' + perName(t.coverDate) : '';
 const inEff = (s, e) => t => { const d = effDate(t); return d >= s && d <= e; };
 
+/* Cuánto cambia tu saldo disponible con este movimiento (el fondo no cuenta). */
+const walletDelta = t => t.type === 'income' || t.type === 'refund' ? t.amount
+  : t.type === 'expense' ? (t.source === 'fund' ? 0 : -t.amount)
+  : t.type === 'deposit' ? -t.amount : t.type === 'withdraw' ? t.amount
+  : t.type === 'adjust' && t.target === 'wallet' ? t.amount : 0;
+/* Lo que traes de periodos anteriores: todo lo que cuenta antes de `from`. Así lo que sobra de octubre pasa a noviembre. */
+const carryBefore = from => state.txs.filter(t => effDate(t) < from).reduce((a, t) => a + walletDelta(t), 0);
+
 function summarize(list) {
-  const r = { income: 0, expense: 0, saved: 0, needs: 0, wants: 0, walletExp: 0, fixedW: 0, varW: 0, byCat: {} };
+  const r = { income: 0, expense: 0, saved: 0, needs: 0, wants: 0, walletExp: 0, fixedW: 0, varW: 0, adjW: 0, byCat: {} };
   for (const t of list) {
     if (t.type === 'income') r.income += t.amount;
     else if (t.type === 'deposit') r.saved += t.amount;
     else if (t.type === 'withdraw') r.saved -= t.amount;
-    else if (t.type === 'adjust') continue;
+    else if (t.type === 'adjust') { if (t.target === 'wallet') r.adjW += t.amount; continue; }
     else if (t.type === 'refund') {
       r.expense -= t.amount; r.walletExp -= t.amount; r.varW -= t.amount;
       r.byCat[t.category] = (r.byCat[t.category] || 0) - t.amount;
@@ -375,10 +384,13 @@ function render() {
   const early = state.txs.filter(t => COVER_TYPES.includes(t.type) && t.type === 'income' && t.coverDate && inEff(s, e)(t) && t.date < s).reduce((a, t) => a + t.amount, 0);
   const earlyNote = early > 0 ? `Incluye ${fmt(early)} de ingresos que recibiste antes y cubren este periodo.` : '';
   $('stats-note').textContent = earlyNote + (earlyNote && sub ? ' ' : '') + (sub ? `Estos tres números son solo de ${title}. El saldo del ciclo y la regla 50/30/20 usan todo el ciclo (${dShort(cyc[0])} – ${dShort(cyc[1])}) hasta el ${dShort(e)}.` : '');
-  const net = C.income - C.walletExp - C.saved; // ingresos del ciclo menos lo que salió del saldo
+  const carry = carryBefore(sub ? cyc[0] : s); // lo que sobró (o faltó) de periodos anteriores
+  const net = C.income - C.walletExp - C.saved + C.adjW; // movimiento propio del periodo
+  const periodTotal = carry + net;
   $('period-label').textContent = sub ? `Saldo del ciclo hasta el ${dShort(e)}` : 'Saldo del periodo · ' + title;
-  $('period-balance').textContent = fmt(net);
-  $('period-balance').classList.toggle('neg', net < 0);
+  $('period-balance').textContent = fmt(periodTotal);
+  $('period-balance').classList.toggle('neg', periodTotal < 0);
+  $('period-sub').textContent = Math.abs(carry) > 0.005 ? `${carry >= 0 ? 'Viene de antes' : 'Arrastras'}: ${fmt(carry)} · Este periodo: ${net >= 0 ? '+' : '−'}${fmt(Math.abs(net))}` : 'Ingresos − gastos − ahorro';
 
   $('rule').innerHTML = [
     barRow('Necesidades 50%', C.needs, C.income * .5, '#2563eb', true),
@@ -391,7 +403,7 @@ function render() {
     const avg = C.varW / passed; // solo gastos variables: los fijos cuentan únicamente en sus fechas
     const upcoming = state.txs.filter(t => t.type === 'expense' && t.esFijo && !t.parentId && t.source !== 'fund')
       .reduce((a, t) => a + occurrences(t, today, e).reduce((x, ds) => x + shareOf(t, ds), 0), 0);
-    $('projection').innerHTML = `Gastos variables: <b>${fmt(avg)}</b> al día. Fijos del periodo: <b>${fmt(C.fixedW + upcoming)}</b> (solo en sus fechas). Proyección de cierre: <b>${fmt(C.income - C.fixedW - upcoming - avg * total)}</b>.`;
+    $('projection').innerHTML = `Gastos variables: <b>${fmt(avg)}</b> al día. Fijos del periodo: <b>${fmt(C.fixedW + upcoming)}</b> (solo en sus fechas). Proyección de cierre (con lo que arrastras): <b>${fmt(carry + C.income - C.fixedW - upcoming - avg * total + C.adjW)}</b>.`;
   } else $('projection').textContent = kind() === 'all' ? 'Esta vista suma todo tu historial. Para evaluar tu 50/30/20 mira un mes o un rango concreto.'
     : sub ? `Regla calculada sobre los ingresos de tu ciclo de pago (${dShort(cyc[0])} – ${dShort(cyc[1])}).`
     : C.income > 0 ? 'Meta de ahorro: ' + fmt(C.income * .2) + ' en este periodo.' : 'Registra un ingreso para calcular tus metas.';
@@ -486,17 +498,28 @@ function renderList(inRange) {
     const cls = t.type === 'income' || t.type === 'refund' ? 'pos' : t.type === 'expense' ? 'neg' : 'sav';
     const icon = t.type === 'income' ? '↓' : t.type === 'refund' ? '↺' : t.type === 'expense' ? '↑' : t.type === 'deposit' ? '⇥' : t.type === 'adjust' ? '≈' : '⇤';
     const tag = t.type === 'refund' ? 'reembolso (reduce gasto)' : t.type === 'adjust' ? 'corrección manual' : t.type === 'deposit' ? 'saldo → fondo' : t.type === 'withdraw' ? 'fondo → saldo' : (t.source === 'fund' ? 'pagado con fondo' : '');
-    const sub = [dShort(t.date), coversLater(t) && 'cubre ' + perName(t.coverDate), t.subcategory || t.note, !fund && t.paymentMethod].filter(Boolean).map(esc).join(' · ');
+    const sub = [dShort(t.date), coverLabel(t), t.subcategory || t.note, !fund && t.paymentMethod].filter(Boolean).map(esc).join(' · ');
     return `<div class="tx"><div class="dot" style="background:${colorOf(t)}">${icon}</div>
       <div class="info"><b>${t.esFijo ? '🔒 ' : ''}${esc(t.type === 'adjust' && t.target === 'wallet' ? 'Ajuste del saldo' : t.type === 'refund' ? 'Reembolso · ' + t.category : TITLES[t.type] || t.category)}</b><small>${sub}</small></div>
       <div class="amt ${cls}">${sign}${fmt(t.amount)}${tag ? `<small>${tag}</small>` : ''}</div>
-      <div class="acts">${t.type === 'adjust' ? '' : `<button data-edit="${t.id}" aria-label="Editar">✏️</button>`}<button data-del="${t.id}" aria-label="Eliminar">🗑️</button></div></div>`;
+      <div class="acts">${t.type === 'income' ? `<button data-cover="${t.id}" title="Cambiar el periodo que cubre" aria-label="Cambiar el periodo que cubre">⇄</button>` : ''}${t.type === 'adjust' ? '' : `<button data-edit="${t.id}" aria-label="Editar">✏️</button>`}<button data-del="${t.id}" aria-label="Eliminar">🗑️</button></div></div>`;
   }).join('');
   $('btn-more').hidden = list.length <= state.limit;
 }
 $('btn-more').onclick = () => { state.limit += 10; render(); };
 $('tx-list').addEventListener('click', async e => {
-  const ed = e.target.closest('[data-edit]'), del = e.target.closest('[data-del]');
+  const ed = e.target.closest('[data-edit]'), del = e.target.closest('[data-del]'), cv = e.target.closest('[data-cover]');
+  if (cv) {
+    // Alterna entre "cubre el periodo en que lo recibí" y "cubre el siguiente". Mueve también el ahorro del 20% de ese día.
+    const t = state.txs.find(x => x.id === cv.dataset.cover); if (!t) return;
+    const next = coversLater(t) ? t.date : nextPeriodStart(t.date);
+    const group = [t, ...state.txs.filter(x => x.type === 'deposit' && x.date === t.date && x.subcategory === 'Ahorro 20%')];
+    try {
+      await Promise.all(group.map(x => updateDoc(doc(db, 'transactions', x.id), { coverDate: next })));
+      toast(`Ahora cubre ${perName(next)}${group.length > 1 ? ' (incluye su ahorro del 20%)' : ''}.`);
+    } catch (err) { console.error(err); toast('No se pudo cambiar el periodo.'); }
+    return;
+  }
   if (ed) openModal(null, state.txs.find(t => t.id === ed.dataset.edit));
   if (del && await ask('¿Eliminar este registro?', 'Eliminar', 'Cancelar')) {
     const t = state.txs.find(x => x.id === del.dataset.del), ref = doc(db, 'transactions', del.dataset.del);
