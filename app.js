@@ -59,7 +59,7 @@ const TITLES = { deposit: 'Guardado en el fondo', withdraw: 'Retiro del fondo', 
 const REFUND_NOTE = 'Reembolso';
 
 // freq: cómo recibes tu ingreso ('m' mensual por defecto, 'q' quincenal, 'w' semanal). mode: 'p' = tu periodo de pago, 'm' mes, 'r' rango, 'all' todo.
-const state = { user: null, txs: [], allIds: new Set(), freq: 'm', mode: 'p', anchor: new Date(), range: null, filter: 'all', limit: 10, editing: null, chart: null, unsubs: [] };
+const state = { user: null, txs: [], allIds: new Set(), freq: 'm', payCovers: 'same', mode: 'p', anchor: new Date(), range: null, filter: 'all', limit: 10, editing: null, chart: null, unsubs: [] };
 
 /* Compatibilidad con datos antiguos: "Ahorro / Inversión" era un gasto, ahora es un traspaso al fondo */
 function normalize(t) {
@@ -142,7 +142,7 @@ onAuthStateChanged(auth, user => {
   $('user-avatar').src = user.photoURL || '';
   // Configuración del usuario (frecuencia de ingreso). Sin configurar = mensual.
   state.unsubs.push(onSnapshot(doc(db, 'users', user.uid), snap => {
-    const f = snap.data()?.payFreq; applyCats(snap.data()?.cats);
+    const f = snap.data()?.payFreq; applyCats(snap.data()?.cats); state.payCovers = snap.data()?.payCovers || 'same';
     if (f && f !== state.freq) { state.freq = f; state.mode = 'p'; }
     if (!snap.exists() && !askedFreq) { askedFreq = true; openSettings(); }
     render();
@@ -232,6 +232,7 @@ function renderCatEditor() {
 }
 function openSettings() {
   document.querySelector(`input[name=freq][value=${state.freq}]`).checked = true;
+  document.querySelector(`input[name=covers][value=${state.payCovers}]`).checked = true;
   for (const k of ['expense', 'income']) draft[k] = Object.entries(CATS[k]).map(([n, v]) => k === 'expense' ? { n, c: v[0], b: v[1] } : { n, c: v[0] });
   renderCatEditor();
   $('settings').classList.add('active');
@@ -256,10 +257,11 @@ $('settings-form').addEventListener('submit', async e => {
     if (!clean[k].length) return toast('Necesitas al menos una categoría de ' + (k === 'expense' ? 'gasto' : 'ingreso') + '.');
   }
   state.freq = document.querySelector('input[name=freq]:checked').value;
+  state.payCovers = document.querySelector('input[name=covers]:checked').value;
   state.mode = 'p'; state.anchor = new Date(); state.limit = 10;
   applyCats(clean);
   $('settings').classList.remove('active'); render();
-  try { await setDoc(doc(db, 'users', state.user.uid), { payFreq: state.freq, cats: clean }, { merge: true }); }
+  try { await setDoc(doc(db, 'users', state.user.uid), { payFreq: state.freq, payCovers: state.payCovers, cats: clean }, { merge: true }); }
   catch (err) { console.error(err); toast('No se pudo guardar tu configuración.'); }
 });
 
@@ -308,6 +310,18 @@ function balances(txs) {
 }
 
 /* ---------- Render ---------- */
+/* Un ingreso (o el ahorro que apartas al cobrar) cuenta para el periodo que CUBRE, no para el día en que llega.
+   Los gastos cuentan siempre en su fecha real. */
+const COVER_TYPES = ['income', 'deposit'];
+const effDate = t => COVER_TYPES.includes(t.type) ? (t.coverDate || t.date) : t.date;
+const nextPeriodStart = d => iso(addDays(periodOf(state.freq, parse(d))[1], 1));
+function perName(d) {
+  const [a, b] = periodOf(state.freq, parse(d));
+  return state.freq === 'm' ? new Intl.DateTimeFormat('es-PE', { month: 'long', year: 'numeric' }).format(parse(d)) : `${dShort(a)} – ${dShort(b)}`;
+}
+const coversLater = t => COVER_TYPES.includes(t.type) && t.coverDate && t.coverDate > periodOf(state.freq, parse(t.date))[1];
+const inEff = (s, e) => t => { const d = effDate(t); return d >= s && d <= e; };
+
 function summarize(list) {
   const r = { income: 0, expense: 0, saved: 0, needs: 0, wants: 0, walletExp: 0, fixedW: 0, varW: 0, byCat: {} };
   for (const t of list) {
@@ -347,18 +361,20 @@ function render() {
   const nav = ['m', 'q', 'w', 'd'].includes(kind());
   $('btn-prev').style.visibility = $('btn-next').style.visibility = nav ? 'visible' : 'hidden';
 
-  const inRange = state.txs.filter(t => t.date >= s && t.date <= e);
-  const R = summarize(inRange); // lo ocurrido en la vista elegida
+  const inRange = state.txs.filter(t => t.date >= s && t.date <= e); // la lista muestra lo que ocurrió en esas fechas
+  const R = summarize(state.txs.filter(inEff(s, e))); // lo ocurrido en la vista elegida
   // Si la vista (un día, una semana, un rango…) cae dentro de un ciclo de pago, el saldo y la regla 50/30/20
   // se calculan con todo ese ciclo hasta la fecha final: el sueldo del día 1 sigue financiando el resto del mes.
   const cyc = periodOf(state.freq, parse(kind() === 'all' ? today : e));
   const sub = kind() !== 'all' && s >= cyc[0] && e <= cyc[1] && !(s === cyc[0] && e === cyc[1]);
-  const C = sub ? summarize(state.txs.filter(t => t.date >= cyc[0] && t.date <= e)) : R;
+  const C = sub ? summarize(state.txs.filter(inEff(cyc[0], e))) : R;
 
   $('s-income').textContent = fmt(R.income);
   $('s-expense').textContent = fmt(R.expense);
   $('s-saved').textContent = fmt(R.saved);
-  $('stats-note').textContent = sub ? `Estos tres números son solo de ${title}. El saldo del ciclo y la regla 50/30/20 usan todo el ciclo (${dShort(cyc[0])} – ${dShort(cyc[1])}) hasta el ${dShort(e)}.` : '';
+  const early = state.txs.filter(t => COVER_TYPES.includes(t.type) && t.type === 'income' && t.coverDate && inEff(s, e)(t) && t.date < s).reduce((a, t) => a + t.amount, 0);
+  const earlyNote = early > 0 ? `Incluye ${fmt(early)} de ingresos que recibiste antes y cubren este periodo.` : '';
+  $('stats-note').textContent = earlyNote + (earlyNote && sub ? ' ' : '') + (sub ? `Estos tres números son solo de ${title}. El saldo del ciclo y la regla 50/30/20 usan todo el ciclo (${dShort(cyc[0])} – ${dShort(cyc[1])}) hasta el ${dShort(e)}.` : '');
   const net = C.income - C.walletExp - C.saved; // ingresos del ciclo menos lo que salió del saldo
   $('period-label').textContent = sub ? `Saldo del ciclo hasta el ${dShort(e)}` : 'Saldo del periodo · ' + title;
   $('period-balance').textContent = fmt(net);
@@ -399,7 +415,7 @@ function renderCompare(s, e, today, C) {
   // Periodo en curso: se compara con los MISMOS días del anterior, para que sea justo
   const live = today >= s && today < e, ce = live ? today : e;
   const pcap = live ? iso(new Date(Math.min(addDays(ps, Math.round((parse(today) - parse(s)) / DAY)), parse(pe)))) : pe;
-  const A = summarize(state.txs.filter(t => t.date >= s && t.date <= ce)), B = summarize(state.txs.filter(t => t.date >= ps && t.date <= pcap));
+  const A = summarize(state.txs.filter(inEff(s, ce))), B = summarize(state.txs.filter(inEff(ps, pcap)));
   $('compare-sub').textContent = `${dShort(s)} – ${dShort(ce)} frente a ${dShort(ps)} – ${dShort(pcap)}${live ? ' (mismos días, periodo en curso)' : ''}`;
   if (!A.expense && !B.expense) { $('compare-body').innerHTML = '<div class="empty">Aún no hay gastos para comparar.</div>'; $('insights').innerHTML = ''; return; }
   const diff = A.expense - B.expense, pct = B.expense ? diff / B.expense * 100 : null;
@@ -470,7 +486,7 @@ function renderList(inRange) {
     const cls = t.type === 'income' || t.type === 'refund' ? 'pos' : t.type === 'expense' ? 'neg' : 'sav';
     const icon = t.type === 'income' ? '↓' : t.type === 'refund' ? '↺' : t.type === 'expense' ? '↑' : t.type === 'deposit' ? '⇥' : t.type === 'adjust' ? '≈' : '⇤';
     const tag = t.type === 'refund' ? 'reembolso (reduce gasto)' : t.type === 'adjust' ? 'corrección manual' : t.type === 'deposit' ? 'saldo → fondo' : t.type === 'withdraw' ? 'fondo → saldo' : (t.source === 'fund' ? 'pagado con fondo' : '');
-    const sub = [dShort(t.date), t.subcategory || t.note, !fund && t.paymentMethod].filter(Boolean).map(esc).join(' · ');
+    const sub = [dShort(t.date), coversLater(t) && 'cubre ' + perName(t.coverDate), t.subcategory || t.note, !fund && t.paymentMethod].filter(Boolean).map(esc).join(' · ');
     return `<div class="tx"><div class="dot" style="background:${colorOf(t)}">${icon}</div>
       <div class="info"><b>${t.esFijo ? '🔒 ' : ''}${esc(t.type === 'adjust' && t.target === 'wallet' ? 'Ajuste del saldo' : t.type === 'refund' ? 'Reembolso · ' + t.category : TITLES[t.type] || t.category)}</b><small>${sub}</small></div>
       <div class="amt ${cls}">${sign}${fmt(t.amount)}${tag ? `<small>${tag}</small>` : ''}</div>
@@ -499,7 +515,14 @@ function applyType() {
 }
 document.querySelectorAll('input[name=type]').forEach(r => r.onchange = applyType);
 const REP_TXT = { laboral: 'cada día laborable (lun–vie)', diario: 'todos los días', semanal: 'cada semana', quincenal: 'cada 15 días' };
+function updateCoverUI() {
+  const d = $('date').value || iso(new Date());
+  $('cover-same').textContent = `El periodo en que lo recibo (${perName(d)})`;
+  $('cover-next').textContent = `El siguiente periodo (${perName(nextPeriodStart(d))})`;
+}
+$('date').addEventListener('change', updateCoverUI);
 function updateFixedUI() {
+  updateCoverUI();
   const on = $('fixed').checked, rep = $('repeat').value, canSplit = SPLITTABLE.includes(rep);
   $('repeat-box').hidden = !on; $('mode-box').hidden = !canSplit;
   if (!on) return;
@@ -521,7 +544,9 @@ function openModal(type, tx) {
   applyType();
   $('modal-title').textContent = tx ? 'Editar registro' : 'Nuevo registro';
   datePicker.setDate(tx?.date || new Date());
+  $('cover').value = state.payCovers; updateCoverUI();
   if (tx) {
+    $('cover').value = coversLater(tx) ? 'next' : 'same';
     $('amount').value = tx.amount; if (CATS[tx.type === 'refund' ? 'expense' : tx.type] && !CATS[tx.type === 'refund' ? 'expense' : tx.type][tx.category]) $('category').add(new Option(tx.category)); $('category').value = tx.category; $('note').value = tx.subcategory || tx.note || '';
     $('method').value = tx.paymentMethod || 'Efectivo'; $('source').value = tx.source || 'wallet';
     $('fixed').checked = !!tx.esFijo; $('repeat').value = tx.repeticion || 'mensual';
@@ -549,6 +574,7 @@ $('tx-form').addEventListener('submit', async e => {
     esFijo: type === 'expense' && $('fixed').checked,
     repeticion: type === 'expense' && $('fixed').checked ? $('repeat').value : null
   };
+  if (COVER_TYPES.includes(type)) data.coverDate = $('cover').value === 'next' ? nextPeriodStart(date) : date;
   const isChild = state.editing && state.txs.find(x => x.id === state.editing)?.parentId; // repeticiones generadas: no redefinen la regla
   if (isChild) { delete data.esFijo; delete data.repeticion; }
   else if (data.esFijo) {

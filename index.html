@@ -112,6 +112,9 @@
     <p id="type-help" class="muted"></p>
     <label class="field">Monto (S/)<input type="number" id="amount" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00"></label>
     <label class="field" data-for="expense income refund">Categoría<select id="category"></select></label>
+    <label class="field" data-for="income deposit">¿Qué periodo cubre?
+      <select id="cover"><option value="same" id="cover-same">El periodo en que lo recibo</option><option value="next" id="cover-next">El siguiente periodo</option></select>
+    </label>
     <label class="field" data-for="expense">Pagar con
       <select id="source"><option value="wallet">Saldo disponible</option><option value="fund">Fondo de ahorro</option></select>
     </label>
@@ -155,6 +158,12 @@
       <label><input type="radio" name="freq" value="m" checked><span class="t-pay">Mensual</span></label>
       <label><input type="radio" name="freq" value="q"><span class="t-pay">Quincenal</span></label>
       <label><input type="radio" name="freq" value="w"><span class="t-pay">Semanal</span></label>
+    </div>
+    <h4>Mi sueldo cubre…</h4>
+    <p class="muted">Si cobras a fin de mes para cubrir el mes siguiente, elige "el siguiente periodo". Así la regla 50/30/20 de cada periodo usa el sueldo que de verdad lo financia. Podrás cambiarlo en cada ingreso.</p>
+    <div class="types two">
+      <label><input type="radio" name="covers" value="same" checked><span class="t-pay">El mismo periodo</span></label>
+      <label><input type="radio" name="covers" value="next"><span class="t-pay">El siguiente</span></label>
     </div>
     <h4>Categorías de gasto</h4>
     <p class="muted">"Necesidad" cuenta para el 50% y "Gusto" para el 30%. Si cambias un nombre, los registros anteriores conservan el nombre antiguo.</p>

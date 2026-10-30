@@ -161,3 +161,5 @@ body{min-height:100dvh;overflow-x:hidden}
 .wallet.main h1{white-space:nowrap;font-size:clamp(1.3rem,6.5vw,1.9rem);overflow-wrap:normal}
 
 .types{grid-template-columns:repeat(5,1fr)}.types span{font-size:.72rem;padding:10px 0}
+
+.types.two{grid-template-columns:repeat(2,1fr)}
